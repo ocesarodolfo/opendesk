@@ -67,4 +67,4 @@ Mensagem nova em conversa encerrada reabre como PENDING.
 
 ## O que fica de fora do v0.1 (ver roadmap)
 
-Grupos, mídia (imagem/áudio/documento), respostas rápidas, tags/etiquetas, transferência entre setores, notificações, relatórios avançados, automações/bot.
+Mídia (imagem/áudio/documento), respostas rápidas, tags/etiquetas, transferência entre setores, notificações, relatórios avançados, automações/bot. *(Grupos passaram a ser suportados na v0.3 — ver `docs/02`.)*

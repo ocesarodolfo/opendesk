@@ -8,6 +8,7 @@ const globalForBus = globalThis as unknown as { __atendimento_bus?: EventEmitter
 export type RealtimeEvent =
   | { type: "connected" }
   | { type: "message:new"; conversationId: string; sectorId?: string | null; message: unknown }
+  | { type: "message:update"; conversationId: string; sectorId?: string | null; message: unknown }
   | { type: "conversation:update"; conversationId: string; sectorId?: string | null; status?: string }
   | { type: "connection:update"; numberId: string; status: string };
 

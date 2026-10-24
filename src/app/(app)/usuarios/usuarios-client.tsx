@@ -8,7 +8,7 @@ type UserItem = {
   email: string;
   role: "ADMIN" | "AGENT";
   active: boolean;
-  sectors: { id: string; name: string }[];
+  sectors: { id: string; name: string; role: string }[];
 };
 
 type SectorItem = {
@@ -21,7 +21,7 @@ export default function UsuariosClient() {
   const [items, setItems] = useState<UserItem[]>([]);
   const [sectors, setSectors] = useState<SectorItem[]>([]);
   const [editing, setEditing] = useState<string | null>(null); // id do usuario em edicao
-  const [draft, setDraft] = useState<string[]>([]); // setores marcados
+  const [draftRoles, setDraftRoles] = useState<Record<string, string>>({}); // sectorId -> AGENT|SUPERVISOR
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,16 +36,21 @@ export default function UsuariosClient() {
 
   function openEdit(item: UserItem) {
     setEditing(editing === item.id ? null : item.id);
-    setDraft(item.sectors.map((s) => s.id));
-    // admin nao precisa de vinculos: ve tudo
+    setDraftRoles(
+      Object.fromEntries(item.sectors.map((s) => [s.id, s.role === "SUPERVISOR" ? "SUPERVISOR" : "AGENT"]))
+    );
     setError(null);
   }
 
   async function saveSectors(item: UserItem) {
+    const membershipRoles = Object.entries(draftRoles).map(([sectorId, role]) => ({
+      sectorId,
+      role: role === "SUPERVISOR" ? "SUPERVISOR" : "AGENT",
+    }));
     const res = await fetch(`/api/users/${item.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sectorIds: item.role === "ADMIN" ? [] : draft }),
+      body: JSON.stringify(item.role === "ADMIN" ? { membershipRoles: [] } : { membershipRoles }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
@@ -169,8 +174,15 @@ export default function UsuariosClient() {
                   ) : (
                     <div className="flex flex-wrap gap-1">
                       {item.sectors.map((s) => (
-                        <span key={s.id} className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
-                          {s.name}
+                        <span
+                          key={s.id}
+                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                            s.role === "SUPERVISOR"
+                              ? "bg-violet-100 text-violet-700"
+                              : "bg-sky-50 text-sky-700"
+                          }`}
+                        >
+                          {s.role === "SUPERVISOR" ? `★ ${s.name}` : s.name}
                         </span>
                       ))}
                     </div>
@@ -211,14 +223,29 @@ export default function UsuariosClient() {
                             <label key={s.id} className="flex items-center gap-2 text-sm text-slate-700">
                               <input
                                 type="checkbox"
-                                checked={draft.includes(s.id)}
+                                checked={s.id in draftRoles}
                                 onChange={(e) =>
-                                  setDraft((prev) =>
-                                    e.target.checked ? [...prev, s.id] : prev.filter((id) => id !== s.id)
-                                  )
+                                  setDraftRoles((prev) => {
+                                    const next = { ...prev };
+                                    if (e.target.checked) next[s.id] = next[s.id] ?? "AGENT";
+                                    else delete next[s.id];
+                                    return next;
+                                  })
                                 }
                               />
                               {s.name}
+                              {s.id in draftRoles ? (
+                                <select
+                                  value={draftRoles[s.id]}
+                                  onChange={(e) =>
+                                    setDraftRoles((prev) => ({ ...prev, [s.id]: e.target.value }))
+                                  }
+                                  className="ml-2 rounded border-slate-300 px-1 py-0.5 text-xs text-slate-600 focus:border-sky-500 focus:outline-none"
+                                >
+                                  <option value="AGENT">Atendente</option>
+                                  <option value="SUPERVISOR">Supervisor</option>
+                                </select>
+                              ) : null}
                             </label>
                           ))}
                         </div>

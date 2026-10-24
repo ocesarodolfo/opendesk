@@ -9,7 +9,7 @@ export async function GET() {
   const users = await prisma.user.findMany({
     select: {
       id: true, name: true, email: true, role: true, active: true,
-      memberships: { select: { sector: { select: { id: true, name: true } } } },
+      memberships: { select: { role: true, sector: { select: { id: true, name: true } } } },
     },
     orderBy: { name: "asc" },
   });
@@ -20,7 +20,7 @@ export async function GET() {
       email: u.email,
       role: u.role,
       active: u.active,
-      sectors: u.memberships.map((m) => ({ id: m.sector.id, name: m.sector.name })),
+      sectors: u.memberships.map((m) => ({ id: m.sector.id, name: m.sector.name, role: m.role })),
     }))
   );
 }

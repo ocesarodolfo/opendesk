@@ -9,3 +9,86 @@
 .chat-scroll::-webkit-scrollbar-thumb {
   @apply rounded bg-slate-300;
 }
+
+/* ---------------------------------------------------------------------
+   VISUALIZADOR DE IMAGEM (lightbox do inbox: zoom + arraste)
+   --------------------------------------------------------------------- */
+@keyframes viewer-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes viewer-frame-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.viewer-backdrop {
+  animation: viewer-fade 0.16s ease-out both;
+}
+.viewer-frame {
+  animation: viewer-frame-in 0.22s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+/* barra de plataformas de vidro (botoes do visualizador) */
+.viewer-btn {
+  @apply rounded-full border border-white/15 bg-black/40 text-white/85 backdrop-blur transition
+    hover:border-white/30 hover:bg-black/60 hover:text-white;
+}
+
+/* ---------------------------------------------------------------------
+   DARK MODE (seletor no menu: claro/escuro/sistema)
+   Decision: instead of rewriting "dark:" per screen, we override the
+   main utility classes under `html.dark`. Invert surfaces, borders and
+   text in a neutral palette (slate); colored chips remain as-is.
+   --------------------------------------------------------------------- */
+html.dark {
+  color-scheme: dark;
+}
+html.dark body {
+  background-color: #12151d;
+  color: #e5e7eb;
+}
+/* superficies */
+html.dark .bg-slate-100 { background-color: #12151d; }
+html.dark .bg-slate-50  { background-color: #1a1f2b; }
+html.dark .bg-white     { background-color: #1c202b; }
+html.dark .bg-slate-200 { background-color: #2a3145; } /* bubble receive / tabs */
+/* texto */
+html.dark .text-slate-900 { color: #f1f5f9; }
+html.dark .text-slate-800 { color: #e2e8f0; }
+html.dark .text-slate-700 { color: #d4d9e2; }
+html.dark .text-slate-600 { color: #a7b0bf; }
+html.dark .text-slate-500 { color: #949eae; }
+html.dark .text-slate-400 { color: #798395; }
+/* bordas */
+html.dark .border-slate-200 { border-color: #2c3242; }
+html.dark .border-slate-100 { border-color: #232837; }
+html.dark .border-slate-300 { border-color: #3a4155; }
+/* hover/hover-compound */
+html.dark .hover\:bg-slate-50:hover { background-color: #232837; }
+/* cepilha o scroll no escuro */
+html.dark .chat-scroll::-webkit-scrollbar-thumb {
+  background-color: #3a4155;
+}
+/* bolhas do chat recebidas: contraste no escuro */
+html.dark .border-slate-300.bg-slate-200 {
+  background-color: #3a445e; /* bolha Recebidas bem mais clara que o fundo */
+  border-color: #4a5676;
+}
+/* bolha Enviadas: esmeralda escuro com borda nitida (texto claro vem do override global) */
+html.dark .border-emerald-300.bg-emerald-200 {
+  background-color: #155e4c;
+  border-color: #1f7a61;
+}
+/* bloco de citação dentro das bolhas: fundo próprio no escuro */
+html.dark .border-slate-400.bg-slate-100 {
+  background-color: #1e2635;
+  border-color: #566379;
+}
+/* chip de reação / strip de emojis */
+html.dark .border-slate-200.bg-white {
+  border-color: #3a4155;
+  background-color: #232837;
+}
+/* menu lateral ja e escuro: mantem neutro */
+
+/* painel do editor de vinculos / modo lote mantem contraste */
+html.dark .bg-sky-50 { background-color: #152238; }

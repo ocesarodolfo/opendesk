@@ -30,10 +30,16 @@ export async function GET(req: NextRequest) {
         : {}),
     },
     include: {
-      contact: true,
+      contact: { include: { tags: { include: { tag: true } } } },
       whatsappNumber: true,
       sector: true,
       assignedUser: { select: { name: true } },
+      // última mensagem p/ o preview da lista (lastMessage no DTO)
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { content: true, mediaType: true, fileName: true },
+      },
     },
     orderBy: { lastMessageAt: "desc" },
     take: limit,

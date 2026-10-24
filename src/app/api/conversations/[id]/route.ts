@@ -5,6 +5,14 @@ import { toConversationDTO } from "@/lib/dto";
 import { emitRealtime } from "@/lib/realtime";
 import { canChangeSector, canViewConversation, getSectorScope } from "@/lib/scope";
 
+// include compartilhado (a chamada inline em findUnique reprovava no tsc 5.9)
+const conversationInclude = {
+  contact: { include: { tags: { include: { tag: true } } } },
+  whatsappNumber: true,
+  sector: true,
+  assignedUser: { select: { name: true } },
+} as const;
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,12 +23,7 @@ export async function GET(
   const { id } = await params;
   const conversation = await prisma.conversation.findUnique({
     where: { id },
-    include: {
-      contact: true,
-      whatsappNumber: true,
-      sector: true,
-      assignedUser: { select: { name: true } },
-    },
+    include: conversationInclude,
   });
   if (!conversation) return NextResponse.json({ error: "Conversa inexistente." }, { status: 404 });
 
@@ -46,6 +49,11 @@ export async function GET(
       mediaUrl: m.mediaUrl,
       mediaType: m.mediaType,
       fileName: m.fileName,
+      senderName: m.senderName,
+      quotedSnippet: m.quotedSnippet,
+      quotedSender: m.quotedSender,
+      reaction: m.reaction,
+      reactionMine: m.reactionMine,
       createdAt: m.createdAt.toISOString(),
     })),
   });
@@ -104,13 +112,11 @@ export async function PATCH(
       ...data,
       // quem inicia o atendimento assume automaticamente a conversa
       ...(data.status === "OPEN" && !data.assignedUserId ? { assignedUserId: session.sub } : {}),
+      // relatorios: quando fechou / voltou a ficar aberta
+      ...(data.status === "CLOSED" ? { closedAt: new Date() } : {}),
+      ...(data.status === "OPEN" || data.status === "PENDING" ? { closedAt: null } : {}),
     },
-    include: {
-      contact: true,
-      whatsappNumber: true,
-      sector: true,
-      assignedUser: { select: { name: true } },
-    },
+    include: conversationInclude,
   });
 
   emitRealtime({

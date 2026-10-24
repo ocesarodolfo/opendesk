@@ -30,16 +30,21 @@ const EXT_BY_MIME: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 };
 
+export function extFor(mime: string): string {
+  // remove parametros do mime ("audio/ogg; codecs=opus" -> "audio/ogg")
+  const base = mime.split(";")[0]?.trim().toLowerCase() ?? "";
+  const known = EXT_BY_MIME[base];
+  if (known) return known;
+  const generic = base.split("/")[1];
+  return generic?.replace(/[^a-z0-9]/gi, "") || "bin";
+}
+
 const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
   Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])
 );
-
-export function extFor(mime: string): string {
-  const known = EXT_BY_MIME[mime];
-  if (known) return known;
-  const generic = mime.split("/")[1];
-  return generic?.replace(/[^a-z0-9]/gi, "") || "bin";
-}
+// nomes legados criados pelo bug do extFor ("audio/ogg; codecs=opus" virava
+// ".oggcodecsopus") - arquivos de voz que já estao em disco continuam tocando
+MIME_BY_EXT.oggcodecsopus = "audio/ogg";
 
 export function mimeFor(name: string, fallback = "application/octet-stream"): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";

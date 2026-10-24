@@ -90,8 +90,17 @@ Ao subir o processo, números com status `CONNECTING/CONNECTED` no banco são **
 | `/api/numbers/[id]/connect` | POST/DELETE | Conectar (QR) / desconectar |
 | `/api/numbers/[id]/status` | GET | Polling de status + QR (data URL) |
 | `/api/conversations` | GET | Lista com filtro `status`/`q` — sem `status` = todas; **escopo por setor** |
-| `/api/conversations/[id]` | GET/PATCH | Detalhe + mensagens; status/agente/setor (setor só p/ ADMIN); 403 fora do escopo |
+| `/api/conversations/[id]` | GET/PATCH | Detalhe + mensagens; status/agente/**setor (só ADMIN)**; 403 fora do escopo |
+| `/api/me` | GET | Sessão atual (`id`, `name`, `role`) — a UI usa p/ exibir controles de ADMIN |
+| `/api/contacts/[id]` | PATCH | Renomear contato (`name`, `null` volta ao pushName) e **trocar etiquetas** (`tagIds: string[]` substitui o conjunto) — ✏️ e chips do inbox |
+| `/api/tags` · `/api/tags/[id]` | GET/POST · PATCH/DELETE | Etiquetas globais (CRUD ADMIN; agentes só leem/vinculam) |
+| `/api/relatorios/export` | GET | Export CSV do relatório do período (`?range=hoje|7d|30d`) — ADMIN |
+| `/api/conversations/bulk` | PATCH | **Atribuição em lote** (SUPERVISOR do setor destas conversas ou ADMIN); máx. 50 |
+| `/api/quick-replies` (+`/[id]`) | GET/POST · PATCH/DELETE | Respostas rápidas: lista p/ inbox (escopo: empresa + setores do usuário); CRUD só ADMIN |
+| `/respostas` (página) | — | Gestão de respostas rápidas (ADMIN): atalho, mensagem, setor ou global |
+| `/relatorios` (página) | — | Relatórios ADMIN: volume, encerramentos, 1ª resposta, por setor/por atendente (`?range=hoje|7d|30d`) |
 | `/api/conversations/[id]/messages` | POST | Enviar mensagem de texto (com checagem de escopo) |
+| `/api/conversations/[id]/react` | POST | Reagir (`{ messageId, emoji }`; emoji `""` remove) — envia pelo WhatsApp e sincroniza bolha via SSE `message:update` |
 | `/api/conversations/[id]/media` | POST | Enviar imagem/áudio/vídeo/doc (multipart, 25 MB) |
 | `/api/media/[name]` | GET | Servir arquivo de mídia (autenticado; `?download=1`) |
 | `/api/auth/password` | PATCH | Troca de própria senha (exige senha atual) |
@@ -101,13 +110,13 @@ Regra de escopo (`src/lib/scope.ts`): **ADMIN** vê tudo; **AGENT** vê as conve
 
 ### 5. Telas
 
-- `/login`, `/dashboard`, `/inbox`, `/numeros`, `/setores` e `/usuarios` (as duas últimas só ADMIN no menu; a guarda real fica na API).
+- `/login`, `/dashboard`, `/inbox`, `/relatorios` (ADMIN), `/numeros`, `/setores` e `/usuarios` (as duas últimas só ADMIN no menu; a guarda real fica na API).
 
-## Limitações conhecidas da v0.2
+## Limitações conhecidas da v0.3
 
 1. **Mídia**: imagens/áudio/vídeo/docs funcionam; stickers, localização e contatos compartilhados ainda são descartados (roadmap).
-2. **Grupos ignorados**: `@g.us` fica fora do inbox (evita ruído interno).
+2. **Grupos (`@g.us`) — suportados desde v0.3**: cada grupo vira uma `Conversation` com `Contact.isGroup = true` (chave = dígitos do id do grupo); `Contact.name` é o subject do grupo (via `groupMetadata`) e cada mensagem guarda `Message.senderName` (quem falou, exibido na bolha). Respostas do atendente vão para o jid do grupo (já roteado por `Contact.jid`). O histórico anterior ao pareamento entra só dentro da janela de 24h. Fora de escopo ainda: menções/quotes renderizados, remoção de participante, mensagens de sistema (entrada/saída de membros).
 3. **Escalabilidade vertical**: SSE + Baileys exigem **instância única** (stateful). Para escalar: Redis (pub/sub de eventos) + worker separado para o Baileys — arquitetura já descrita em `docs/08`.
-4. **Permissão por setor nos dados**: hoje todo atendente vê todas as conversas (a transferência é manual); filtro por `SectorMembership` é próximo passo (roadmap fase 3).
+4. **Permissão por setor nos dados** ✅ F3: AGENT vê só conversas dos setores com vínculo (`SectorMembership`) + números sem setor; ADMIN vê tudo (`src/lib/scope.ts`).
 5. **Logs**: console.log; integrar arquivos estruturados (pino) em produção.
 6. **Retenção de mídia**: arquivos em `media/` não expiram; implementar política de descarte junto com LGPD (docs/05).

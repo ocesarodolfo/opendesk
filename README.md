@@ -43,6 +43,8 @@ Validação manual rápida (com o servidor rodando e seed aplicado):
 ```bash
 node scripts/smoke-test.mjs 3000   # testa login, APIs, páginas e SSE
 node scripts/f3-scope-test.mjs <conversationId>  # teste de escopo por setor (cria e limpa dados temporários)
+node scripts/f3-supervisor-test.mjs             # teste do SUPERVISOR + atribuição em lote
+node scripts/f3-quick-replies-test.mjs          # teste das respostas rápidas (auto-limpante)
 ```
 
 > Guia completo: `docs/04-guia-de-instalacao.md`

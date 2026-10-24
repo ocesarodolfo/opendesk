@@ -6,6 +6,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
+  downloadMediaMessage,
   Browsers,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
@@ -20,22 +21,38 @@ export type NumberStatus = "DISCONNECTED" | "CONNECTING" | "CONNECTED";
 type IncomingMessage = {
   key: {
     remoteJid?: string | null;
+    remoteJidAlt?: string | null;
     fromMe?: boolean;
     id?: string | null;
+    // em grupos (@g.us): jid do participante que enviou a mensagem
+    participant?: string | null;
+    // numero real (p/lid) vindo da wire do WhatsApp (nova era LID)
+    senderPn?: string | null;
+    participantPn?: string | null;
   };
   message?:
     | {
         conversation?: string;
-        extendedTextMessage?: { text?: string };
-        imageMessage?: { mimetype?: string; caption?: string };
-        videoMessage?: { mimetype?: string; caption?: string };
-        audioMessage?: { mimetype?: string };
-        documentMessage?: { mimetype?: string; caption?: string; fileName?: string };
+        extendedTextMessage?: { text?: string; contextInfo?: unknown };
+        imageMessage?: { mimetype?: string; caption?: string; contextInfo?: unknown };
+        videoMessage?: { mimetype?: string; caption?: string; contextInfo?: unknown };
+        audioMessage?: { mimetype?: string; contextInfo?: unknown };
+        documentMessage?: { mimetype?: string; caption?: string; fileName?: string; contextInfo?: unknown };
+        // reacoes chegam como protocolMessage (type 3) com a chave da message original
+        protocolMessage?: {
+          type?: number;
+          key?: { remoteJid?: string | null; id?: string | null; participant?: string | null };
+          text?: string;
+          timestampMs?: string | number | { toNumber?: () => number };
+        };
       }
     | null;
   messageTimestamp?: unknown;
   pushName?: string | null;
 };
+
+// mensagem citada (reply do WhatsApp) reduzida para exibicao
+type QuotedInfo = { snippet: string; sender: string };
 
 type IncomingMedia = { mime: string; caption: string; fileName: string };
 
@@ -43,6 +60,10 @@ type ManagedSession = {
   socket: ReturnType<typeof makeWASocket>;
   status: NumberStatus;
   qr: string | null;
+  // identidade do PROPRIA numero da sessao (para descartar sync de
+  // mensagens enviadas pelo celular, que chegam com remoteJid = nos mesmos)
+  selfPnDigits?: string | null;
+  selfLidDigits?: string | null;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   stopping?: boolean;
 };
@@ -68,6 +89,13 @@ function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+/** jid sem variantes de device/usuario: "55279...:25@s.whatsapp.net" -> "55279...@s.whatsapp.net" */
+function normalizeJid(jid: string): string | null {
+  const [user = "", server = ""] = jid.split("@");
+  if (!user || !server) return null;
+  return `${user.split(":")[0]}@${server}`;
+}
+
 /** messageTimestamp (segundos ou bigint) -> ms */
 function messageTimestampMs(msg: { messageTimestamp?: unknown }): number {
   const ts = msg.messageTimestamp as number | bigint | { toNumber?: () => number } | undefined;
@@ -85,6 +113,31 @@ function messageTimestampMs(msg: { messageTimestamp?: unknown }): number {
  * de "Pendentes" viria inundado de mensagens antigas.
  */
 const MAX_BACKFILL_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Identidade do PROPRIO numero da sessao, a partir de creds.me:
+ * `me.id`/`me.jid` = telefone real (@s.whatsapp.net) e `me.lid` = LID.
+ * Necessário para NAO criar conversa consigo mesmo: quando o atendente manda
+ * mensagem pelo celular, o sync offline repassa a copia com remoteJid = o
+ * LID do proprio numero (stanza `category=peer` sem `recipient`). */
+function syncSelfIdentity(session: ManagedSession): void {
+  const creds = (
+    session.socket as unknown as {
+      authState?: { creds?: { me?: { id?: string; jid?: string; lid?: string } | null } };
+    }
+  ).authState?.creds;
+  const me = creds?.me ?? null;
+  const pnJid = me?.jid
+    ? me.jid
+    : me?.id?.endsWith("@s.whatsapp.net")
+      ? me.id
+      : null;
+  session.selfPnDigits = pnJid ? digitsOnly(pnJid.split("@")[0].split(":")[0]) : null;
+  // me.lid pode vir com o device junto ("196...:25@lid") — fatia o device,
+  // senao o filtro de self-chat nao casa com o remoteJid (sem device)
+  const lidJid = me?.lid ?? (me?.id?.endsWith("@lid") ? me.id : null);
+  session.selfLidDigits = lidJid ? digitsOnly(lidJid.split("@")[0].split(":")[0]) : null;
+}
 
 /**
  * Re-estabelece as sessoes que estavam ativas antes de um restart do
@@ -119,19 +172,100 @@ function extractText(msg: IncomingMessage): string {
   );
 }
 
+/** Rotulo curto quando a mensagem citada e midia sem legenda. */
+function quotedMediaLabel(m: NonNullable<IncomingMessage["message"]>): string {
+  if (m.imageMessage) return "[Imagem]";
+  if (m.videoMessage) return "[Video]";
+  if (m.audioMessage) return "[Audio]";
+  if (m.documentMessage) return m.documentMessage.fileName ? `[Documento: ${m.documentMessage.fileName}]` : "[Documento]";
+  return "[Mensagem]";
+}
+
+/**
+ * Extrai a mensagem citada (reply) de qualquer tipo que carregue contextInfo.
+ * Devolve trecho curto para exibir na bolha + telefone real de quem falou.
+ */
+function extractQuote(msg: IncomingMessage): QuotedInfo | null {
+  const m = msg.message;
+  if (!m) return null;
+  const ci = (m.extendedTextMessage?.contextInfo ??
+    m.imageMessage?.contextInfo ??
+    m.videoMessage?.contextInfo ??
+    m.documentMessage?.contextInfo ??
+    m.audioMessage?.contextInfo) as
+    | {
+        quotedMessage?: Record<string, unknown>;
+        participantPn?: string | null;
+        participant?: string | null;
+      }
+    | null | undefined;
+  const quoted = ci?.quotedMessage;
+  if (!quoted) return null;
+
+  const q = quoted as {
+    conversation?: string;
+    extendedTextMessage?: { text?: string };
+    imageMessage?: { caption?: string };
+    videoMessage?: { caption?: string };
+    documentMessage?: { caption?: string };
+  };
+  const snippet =
+    q.conversation ??
+    q.extendedTextMessage?.text ??
+    q.imageMessage?.caption ??
+    q.videoMessage?.caption ??
+    q.documentMessage?.caption ??
+    quotedMediaLabel(q as never);
+  const trimmed = snippet.trim().slice(0, 200);
+  if (!trimmed) return null;
+
+  const senderJid = ci?.participantPn || ci?.participant || "";
+  return { snippet: trimmed, sender: digitsOnly(senderJid.split("@")[0]) };
+}
+
+/**
+ * Numero real (PN) do remetente, quando o WhatsApp o informa junto do LID.
+ * Ordem: remoteJidAlt > participantPn > senderPn (o WhatsApp usa fontes
+ * diferentes por rota de entrega).
+ */
+function resolvePhone(msg: IncomingMessage, jid: string, isGroup: boolean): string {
+  if (isGroup) {
+    // contato do inbox e o proprio grupo (@g.us continua sem "lid")
+    return digitsOnly(jid.split("@")[0]);
+  }
+  const key = msg.key;
+  if (!jid.endsWith("@lid")) {
+    return digitsOnly(jid.split("@")[0].split(":")[0]);
+  }
+  const candidates = [
+    key.remoteJidAlt,
+    key.participantPn,
+    key.senderPn,
+  ];
+  for (const cand of candidates) {
+    if (typeof cand === "string" && cand.endsWith("@s.whatsapp.net")) {
+      const digits = digitsOnly(cand.split("@")[0]);
+      if (digits) return digits;
+    }
+  }
+  return digitsOnly(jid.split("@")[0]);
+}
+
 /**
  * Baixa a midia da mensagem (quando existir). Retorna null se nao houver
  * midia ou se o download falhar (a mensagem segue como texto).
+ *
+ * Na v6.7 do Baileys o download e um utilitario exportado (nao um metodo
+ * do socket) — por isso recebemos apenas a mensagem.
  */
-async function downloadMessageMedia(
-  socket: ReturnType<typeof makeWASocket>,
-  msg: unknown
-): Promise<Buffer | null> {
+async function downloadMessageMedia(msg: unknown): Promise<Buffer | null> {
   try {
-    const raw = socket as unknown as {
-      downloadMediaMessage: (m: unknown) => Promise<Buffer>;
-    };
-    return await raw.downloadMediaMessage(msg);
+    const out = await downloadMediaMessage(
+      msg as Parameters<typeof downloadMediaMessage>[0],
+      "buffer",
+      {}
+    );
+    return Buffer.isBuffer(out) ? out : null;
   } catch (error) {
     console.error("[whatsapp] falha ao baixar midia:", error);
     return null;
@@ -155,6 +289,99 @@ function extractMedia(msg: IncomingMessage): IncomingMedia | null {
   }
   // stickers/contatos/localizacao: sem tratamento v2.x
   return null;
+}
+
+/**
+ * Garante o contato do chat. Casamento em ordem:
+ * 1) por `jid` do chat (inclui LID) — essencial: as copias das mensagens que
+ *    o atendente manda pelo celular chegam com remoteJid = o LID do contato
+ *    (e sem o numero). Sem esse match, cada copia criava contato + conversa
+ *    duplicada ("conversa consigo mesmo" na lista).
+ * 2) por `phone`; e migra contato criado com os digitos do LID para o numero
+ *    real assim que o WhatsApp o revela (historico segue no mesmo contato).
+ */
+async function upsertContact(
+  msg: IncomingMessage,
+  jid: string,
+  phone: string,
+  isGroup: boolean,
+  groupName: string | null,
+  pushName: string | null
+) {
+  const lidDigits = jid.endsWith("@lid") ? digitsOnly(jid.split("@")[0]) : null;
+  const jidKey = normalizeJid(jid) ?? jid;
+
+  // 1) casamento por jid
+  let contact = await prisma.contact.findFirst({ where: { jid: jidKey } });
+
+  // 1a) o contato ainda tem telefone placeholder (digitos do LID) e agora
+  //     chegou o numero real (attrs de PN): migra o telefone. Se `phone` sao
+  //     os proprios digitos do LID, mantem o que ja existe.
+  if (contact && !isGroup && lidDigits && phone !== lidDigits && contact.phone === lidDigits) {
+    try {
+      contact = await prisma.contact.update({ where: { id: contact.id }, data: { phone, jid: jidKey } });
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        (error as { code?: string }).code === "P2002"
+      ) {
+        // outro processo migrou primeiro: segue com o contato ja atualizado
+        contact = await prisma.contact.findUnique({ where: { phone } });
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  if (!contact) {
+    contact = await prisma.contact.findUnique({ where: { phone } });
+    if (!contact && lidDigits && lidDigits !== phone) {
+      const lidContact = await prisma.contact.findUnique({ where: { phone: lidDigits } });
+      if (lidContact) {
+        try {
+          contact = await prisma.contact.update({
+            where: { id: lidContact.id },
+            data: { phone, updatedAt: new Date(), jid: jidKey },
+          });
+        } catch (error) {
+          if (
+            error &&
+            typeof error === "object" &&
+            (error as { code?: string }).code === "P2002"
+          ) {
+            // outro processo migrou primeiro: segue com o contato ja atualizado
+            contact = await prisma.contact.findUnique({ where: { phone } });
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
+  }
+
+  if (contact) {
+    return prisma.contact.update({
+      where: { id: contact.id },
+      data: {
+        updatedAt: new Date(),
+        jid: jidKey,
+        // grupo renomeado: o nome do inbox acompanha o subject
+        ...(isGroup && groupName ? { name: groupName } : {}),
+        // pushName so preenche se o contato ainda nao tem (renome manual preservado em `name`)
+        ...(isGroup || contact.pushName || !pushName ? {} : { pushName }),
+      },
+    });
+  }
+  return prisma.contact.create({
+    data: {
+      phone,
+      isGroup,
+      pushName: isGroup ? null : pushName,
+      name: groupName,
+      jid: jidKey,
+    },
+  });
 }
 
 /**
@@ -193,6 +420,8 @@ export const waManager = {
 
     const session: ManagedSession = { socket, status: "CONNECTING", qr: null };
     sessions.set(numberId, session);
+    // creds do disco podem ja carregar a identidade propria (sessoes antigas)
+    syncSelfIdentity(session);
     await this.setDbStatus(numberId, "CONNECTING");
 
     socket.ev.on("creds.update", saveCreds);
@@ -227,7 +456,19 @@ export const waManager = {
     if (update.connection === "open") {
       session.status = "CONNECTED";
       session.qr = null;
-      const jid = update.user?.id ?? null;
+      // identidade propria: connection.update NAO traz `user` nesta versao do
+      // Baileys; o correto e creds.me (id/jid = PN real, lid = LID)
+      syncSelfIdentity(session);
+      const me = (
+        session.socket as unknown as {
+          authState?: { creds?: { me?: { id?: string; jid?: string; lid?: string } | null } };
+        }
+      ).authState?.creds?.me;
+      const jid = me?.jid?.endsWith("@s.whatsapp.net")
+        ? me.jid
+        : me?.id?.endsWith("@s.whatsapp.net")
+          ? me.id
+          : null;
       const phone = jid ? digitsOnly(jid.split("@")[0].split(":")[0]) : null;
       await prisma.whatsAppNumber
         .update({
@@ -236,7 +477,9 @@ export const waManager = {
         })
         .catch(() => undefined);
       emitRealtime({ type: "connection:update", numberId, status: "CONNECTED" });
-      console.log(`[whatsapp] numero ${numberId} conectado (${phone ?? "?"})`);
+      console.log(
+        `[whatsapp] numero ${numberId} conectado (${phone ?? "?"}${session.selfLidDigits ? ` · lid ${session.selfLidDigits}` : ""})`
+      );
     }
 
     if (update.connection === "close") {
@@ -274,17 +517,40 @@ export const waManager = {
       const msg = rawUnknown as IncomingMessage;
       try {
         const jid = msg.key.remoteJid ?? "";
-        if (!jid || jid.endsWith("@status") || jid.endsWith("@newsletter") || jid.endsWith("@g.us")) continue;
+        if (!jid || jid.endsWith("@status") || jid.endsWith("@newsletter")) continue;
 
-        const remoteAlt = (msg.key as { remoteJidAlt?: string }).remoteJidAlt;
+        // Grupos (@g.us) sao suportados: o contato e o propio grupo
+        // e cada mensagem guarda o participante que falou (senderName).
+        const isGroup = jid.endsWith("@g.us");
+
+        // mensagem do PROPRIO numero (sync das mensagens que o atendente manda
+        // pelo celular): chegam com remoteJid = o LID do proprio numero e viram
+        // "conversa consigo mesmo" — descartar
+        if (!isGroup) {
+          const chatDigits = digitsOnly(jid.split("@")[0].split(":")[0]);
+          const session = sessions.get(numberId);
+          if (
+            session &&
+            ((session.selfPnDigits && chatDigits === session.selfPnDigits) ||
+              (session.selfLidDigits && chatDigits === session.selfLidDigits))
+          ) {
+            continue;
+          }
+        }
+
+        // reacoes chegam como protocolMessage (type = 3): atualizam a
+        // mensagem original e nao criam registros novos
+        const protocol = msg.message?.protocolMessage;
+        if (protocol && protocol.type === 3 && protocol.key?.id) {
+          await this.applyReaction(numberId, msg);
+          continue;
+        }
+
         // LID: contas novas chegam com "<identificador>@lid" em vez do telefone.
-        // Sem remoteJidAlt, usamos os digitos do proprio LID como chave do contato
-        // (estaveis) e guardamos o jid em Contact.jid para responder por ele.
-        const phone = jid.endsWith("@lid")
-          ? remoteAlt?.endsWith("@s.whatsapp.net")
-            ? digitsOnly(remoteAlt.split("@")[0])
-            : digitsOnly(jid.split("@")[0])
-          : digitsOnly(jid.split("@")[0].split(":")[0]);
+        // Quando o WhatsApp informa o numero real (remoteJidAlt/participantPn/
+        // senderPn) usamos ele como chave do contato; o jid LID fica em
+        // Contact.jid para as respostas.
+        const phone = resolvePhone(msg, jid, isGroup);
         if (!phone) continue;
 
         const text = extractText(msg);
@@ -295,11 +561,48 @@ export const waManager = {
         const ageMs = Date.now() - messageTimestampMs(msg);
         if (ageMs > MAX_BACKFILL_AGE_MS) continue;
 
-        await this.ingestMessage(numberId, msg, jid, phone, text, media);
+        await this.ingestMessage(numberId, msg, jid, phone, text, media, isGroup);
       } catch (error) {
         console.error("[whatsapp] erro ao processar mensagem:", error);
       }
     }
+  },
+
+  /**
+   * Reacao (emoji) recebida do WhatsApp: grava na mensagem alvo
+   * (ultima reacao por autor vence; mesmo emoji do mesmo autor remove).
+   */
+  async applyReaction(numberId: string, msg: IncomingMessage) {
+    const pm = msg.message?.protocolMessage;
+    if (!pm?.key?.id) return;
+
+    const target = await prisma.message.findFirst({
+      where: { externalId: pm.key.id, conversation: { whatsappNumberId: numberId } },
+      select: { id: true, conversationId: true, reaction: true, reactionMine: true },
+    });
+    if (!target) return; // alvo fora do historico importado
+
+    const mine = msg.key.fromMe === true;
+    const emoji = (pm.text ?? "").trim();
+    // toggle: mesma emoji do mesmo autor apaga a reacao ("clicou de novo")
+    const removing = emoji === "" || (target.reaction === emoji && target.reactionMine === mine);
+
+    const updated = await prisma.message.update({
+      where: { id: target.id },
+      data: { reaction: removing ? null : emoji, reactionMine: removing ? null : mine },
+      select: { id: true, reaction: true, reactionMine: true },
+    });
+
+    const conv = await prisma.conversation.findUnique({
+      where: { id: target.conversationId },
+      select: { sectorId: true },
+    });
+    emitRealtime({
+      type: "message:update",
+      conversationId: target.conversationId,
+      sectorId: conv?.sectorId ?? null,
+      message: { id: updated.id, reaction: updated.reaction, reactionMine: updated.reactionMine },
+    });
   },
 
   async ingestMessage(
@@ -308,7 +611,8 @@ export const waManager = {
     jid: string,
     phone: string,
     text: string,
-    media: IncomingMedia | null
+    media: IncomingMedia | null,
+    isGroup = false
   ) {
     const direction = msg.key.fromMe ? "OUTGOING" : "INCOMING";
     const createdAt = new Date(messageTimestampMs(msg));
@@ -323,11 +627,29 @@ export const waManager = {
     }
 
     // 1) contato (guarda o jid real para responder com ele)
-    const contact = await prisma.contact.upsert({
-      where: { phone },
-      update: { updatedAt: new Date(), jid },
-      create: { phone, pushName: msg.pushName ?? null, jid },
-    });
+    //    grupo: nome vem do subject do grupo (metadata do Baileys)
+    let groupName: string | null = null;
+    if (isGroup) {
+      const meta = await sessions
+        .get(numberId)
+        ?.socket.groupMetadata(jid)
+        .catch(() => null);
+      groupName = meta?.subject ?? null;
+    }
+
+    // migracao LID -> numero real: contato criado com os digitos do LID passa
+    // a usar o numero real assim que o WhatsApp o revela (historico segue
+    // ligado ao mesmo contato; o jid LID continua salvo em Contact.jid)
+    // pushName: NAO usa em msg fromMe (a copia do celular traz pushName do
+    // PROPRIO atendente - "Rodolfo Cesar" - e iria colar no contato errado)
+    const contact = await upsertContact(
+      msg,
+      jid,
+      phone,
+      isGroup,
+      groupName,
+      msg.key.fromMe ? null : (msg.pushName ?? null)
+    );
 
     // 2) conversa (PENDING/OPEN) para o par numero + contato
     let conversation = await prisma.conversation.findFirst({
@@ -362,8 +684,7 @@ export const waManager = {
     let mediaType: string | undefined;
     let fileName: string | undefined;
     if (media) {
-      const socket = sessions.get(numberId)?.socket;
-      const buffer = socket ? await downloadMessageMedia(socket, msg) : null;
+      const buffer = await downloadMessageMedia(msg);
       if (buffer && buffer.length > 0) {
         mediaUrl = await saveMediaFile(buffer, media.mime);
         mediaType = media.mime;
@@ -374,6 +695,7 @@ export const waManager = {
     }
 
     // 4) mensagem
+    const quoted = extractQuote(msg);
     const message = await prisma.message.create({
       data: {
         conversationId: conversation.id,
@@ -384,6 +706,18 @@ export const waManager = {
         fileName: fileName ?? null,
         externalId: msg.key.id ?? null,
         status: "SENT",
+        // em grupos, guarda quem falou (p/ exibir o nome na bolha)
+        senderName:
+          isGroup && !msg.key.fromMe
+            ? msg.pushName ??
+              digitsOnly((msg.key.participantPn ?? msg.key.participant ?? "").split("@")[0]) ??
+              null
+            : null,
+        // em grupos: jid do autor (necessario p/ reagir as mensagens dele)
+        senderJid: isGroup && !msg.key.fromMe ? (msg.key.participant ?? null) : null,
+        // resposta citando outra mensagem ("responder" do WhatsApp)
+        quotedSnippet: quoted?.snippet ?? null,
+        quotedSender: quoted?.sender ?? null,
         createdAt,
       },
     });
@@ -393,7 +727,7 @@ export const waManager = {
       data: {
         lastMessageAt: createdAt,
         // mensagem nova em conversa encerrada reabre como PENDING
-        ...(wasClosed ? { status: "PENDING" } : {}),
+        ...(wasClosed ? { status: "PENDING", closedAt: null } : {}),
       },
     });
 
@@ -426,8 +760,7 @@ export const waManager = {
     return { externalId: result?.key?.id ?? null };
   },
 
-  /** Envia midia (imagem/video/audio/documento) com legenda opcional. */
-  async sendMedia(
+  /** Envia midia (imagem/video/audio/documento) com legenda opcional. */  async sendMedia(
     numberId: string,
     toPhone: string,
     buffer: Buffer,
@@ -457,6 +790,36 @@ export const waManager = {
 
     const result = await session.socket.sendMessage(jid, content as never);
     return { externalId: result?.key?.id ?? null };
+  },
+
+  /**
+   * Reage a uma mensagem na conversa (ou remove a reacao com emoji vazio).
+   * @param targetFromMe true quando a mensagem alvo saiu do nosso numero
+   * @param participantJid em grupos: jid do autor da mensagem alvo
+   */
+  async sendReaction(
+    numberId: string,
+    chatJid: string,
+    targetExternalId: string,
+    targetFromMe: boolean,
+    participantJid: string | null,
+    emoji: string
+  ): Promise<void> {
+    const session = sessions.get(numberId);
+    if (!session || session.status !== "CONNECTED") {
+      throw new Error("Numero WhatsApp nao conectado");
+    }
+    await session.socket.sendMessage(chatJid, {
+      react: {
+        text: emoji,
+        key: {
+          remoteJid: chatJid,
+          id: targetExternalId,
+          fromMe: targetFromMe,
+          ...(participantJid ? { participant: participantJid } : {}),
+        },
+      },
+    } as never);
   },
 
   /** Desconecta e apaga a sessao local (novo QR passa a ser obrigatorio). */

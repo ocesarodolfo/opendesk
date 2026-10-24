@@ -14,7 +14,8 @@ export async function GET(
 
   const { name } = await params;
   // protecao contra path traversal: apenas nomes "msg-<uuid>.<ext>"
-  if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,6}$/.test(name)) {
+  // (ext pode chegar a 16 chars pelos nomes legados ex. ".oggcodecsopus")
+  if (!/^[A-Za-z0-9-]+\.[A-Za-z0-9]{1,16}$/.test(name)) {
     return new NextResponse("Invalid name", { status: 400 });
   }
 
