@@ -1,0 +1,34 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# producao
+/build
+
+# variaveis de ambiente (NUNCA versionar)
+.env
+.env.local
+.env*.local
+
+# banco de dados local
+prisma/data/
+*.db
+*.db-journal
+
+# sessoes do whatsapp (credenciais - NUNCA versionar)
+/sessions/
+
+# midias das conversas (privacidade - NUNCA versionar)
+/media/
+
+# logs
+*.log
+npm-debug.log*
+
+# sistema
+.DS_Store
+Thumbs.db

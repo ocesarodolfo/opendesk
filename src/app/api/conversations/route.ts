@@ -1,0 +1,48 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { getSession } from "@/lib/auth";
+import { toConversationDTO } from "@/lib/dto";
+import { conversationVisibilityFilter, getSectorScope } from "@/lib/scope";
+
+export async function GET(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Nao autenticado" }, { status: 401 });
+  const scope = await getSectorScope(session);
+
+  const { searchParams } = new URL(req.url);
+  const status = searchParams.get("status");
+  const q = searchParams.get("q")?.trim() || "";
+  const limit = Math.min(Number(searchParams.get("limit") ?? 60) || 60, 100);
+
+  const conversations = await prisma.conversation.findMany({
+    where: {
+      // escopo por setor (F3): ADMIN tudo; agente, seus setores + sem-setor
+      ...conversationVisibilityFilter(scope),
+      ...(status ? { status } : {}),
+      ...(q
+        ? {
+            OR: [
+              { contact: { name: { contains: q } } },
+              { contact: { pushName: { contains: q } } },
+              { contact: { phone: { contains: q } } },
+            ],
+          }
+        : {}),
+    },
+    include: {
+      contact: true,
+      whatsappNumber: true,
+      sector: true,
+      assignedUser: { select: { name: true } },
+    },
+    orderBy: { lastMessageAt: "desc" },
+    take: limit,
+  });
+
+  return NextResponse.json(
+    conversations.map((c) => {
+      const dto = toConversationDTO(c);
+      return dto;
+    })
+  );
+}

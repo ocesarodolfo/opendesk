@@ -1,0 +1,148 @@
+// =====================================================================
+// Modelo de dados - Central de Atendimento Multicanal
+// Documentacao completa em: docs/03-modelo-de-dados.md
+//
+// SQLite agora | MySQL depois: basta trocar o provider abaixo e rodar
+// `npx prisma migrate reset` (ver docs para o passo a passo)
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// USUARIOS E SETORES
+// ---------------------------------------------------------------------
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  // "ADMIN" | "AGENT" (SQLite nao suporta enum nativo)
+  role         String        @default("AGENT")
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  memberships            SectorMembership[]
+  assignedConversations  Conversation[]     @relation("AssignedUser")
+}
+
+model Sector {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  memberships   SectorMembership[]
+  numbers       WhatsAppNumber[]
+  conversations Conversation[]
+}
+
+model SectorMembership {
+  id       String   @id @default(uuid())
+  userId   String
+  sectorId String
+  role     String   @default("AGENT") // reserva p/ futura granularidade (SUPERVISOR)
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sector Sector @relation(fields: [sectorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sectorId])
+}
+
+// ---------------------------------------------------------------------
+// CANAIS / NUMEROS
+// ---------------------------------------------------------------------
+
+// Por enquanto apenas WhatsApp (nao-oficial via Baileys).
+// A tabela foi desenhada para receber outros canais no futuro
+// (WhatsApp Cloud API, Telegram, Instagram Direct etc.) - ver docs/08
+model WhatsAppNumber {
+  id          String   @id @default(uuid())
+  label       String // "Suporte - 55 11 9999-0000"
+  // Identificador real atribuido pelo WhatsApp apos o pareamento
+  phone       String?
+  jid         String?
+  // "DISCONNECTED" | "CONNECTING" | "CONNECTED"
+  status      String   @default("DISCONNECTED")
+  // Ultimo erro reportado pela conexao (p/ diagnostico no painel)
+  lastError   String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  sector        Sector?  @relation(fields: [sectorId], references: [id])
+  sectorId      String?
+  conversations Conversation[]
+}
+
+// ---------------------------------------------------------------------
+// ATENDIMENTO
+// ---------------------------------------------------------------------
+
+model Contact {
+  id        String   @id @default(uuid())
+  // Somente digitos, com DDI ex.: 5511999990000
+  phone     String   @unique
+  name      String?
+  pushName  String?
+  // Ultimo jid remoto conhecido (conta nova usa "@lid"); responde por ele
+  jid       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+}
+
+model Conversation {
+  id             String   @id @default(uuid())
+  // "PENDING" | "OPEN" | "CLOSED"
+  // PENDING = nova conversa aguardando agente pegar; OPEN = em atendimento
+  status         String   @default("PENDING")
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  contact         Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId       String
+  whatsappNumber  WhatsAppNumber @relation(fields: [whatsappNumberId], references: [id])
+  whatsappNumberId String
+  sector          Sector?       @relation(fields: [sectorId], references: [id])
+  sectorId        String?
+  assignedUser    User?         @relation("AssignedUser", fields: [assignedUserId], references: [id])
+  assignedUserId  String?
+
+  messages Message[]
+
+  @@index([status, lastMessageAt])
+  @@index([whatsappNumberId, contactId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  // "INCOMING" | "OUTGOING"
+  direction      String
+  content        String // texto e/ou legenda da midia
+  // Midia (v2): arquivo gravado em MEDIA_DIR/<mediaUrl>
+  mediaUrl       String?
+  mediaType      String? // mimetype ("image/jpeg", "audio/mp4"...)
+  fileName       String? // nome original de documentos
+  // "SENT" | "FAILED" (evolucoes: DELIVERED/READ)
+  status         String   @default("SENT")
+  // Id da mensagem no lado do WhatsApp (deduplicacao)
+  externalId     String?
+  createdAt      DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+
+  // Ignora grupos/etiquetas/status/update na v0.1 - ver docs/06-roadmap.md
+  @@index([conversationId, createdAt])
+}
