@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, hashPassword } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Regra de protecao: um ADMIN nao pode inativar o proprio cadastro
 // (evita perder o ultimo acesso de emergencia).
@@ -86,5 +87,20 @@ export async function PATCH(
       },
     });
   });
+
+  const changes: string[] = [];
+  if (data.role !== undefined) changes.push(`papel=${data.role}`);
+  if (data.active !== undefined) changes.push(data.active ? "ativado" : "inativado");
+  if (data.passwordHash !== undefined) changes.push("senha redefinida");
+  if (memberships !== null) changes.push(`${memberships.length} vinculo(s) de setor`);
+  void auditLog({
+    action: AUDIT_ACTIONS.USUARIO_ATUALIZADO,
+    entity: "User",
+    entityId: id,
+    detail: `${user.name} <${user.email}>: ${changes.join(", ")}`,
+    session,
+    req,
+  });
+
   return NextResponse.json(user);
 }

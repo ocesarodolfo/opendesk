@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { waManager } from "@/lib/whatsapp/manager";
 import { emitRealtime } from "@/lib/realtime";
 import { canViewConversation, getSectorScope } from "@/lib/scope";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Envio de mensagem textual pelo atendente
 export async function POST(
@@ -58,6 +59,15 @@ export async function POST(
       type: "message:new",
       conversationId: id,
       message: { ...message, conversationStatus: conversation.status },
+    });
+
+    void auditLog({
+      action: AUDIT_ACTIONS.MENSAGEM_ENVIADA,
+      entity: "Conversation",
+      entityId: id,
+      detail: `enviada a ${conversation.contact.name || conversation.contact.phone}: ${text.slice(0, 80)}`,
+      session,
+      req,
     });
 
     return NextResponse.json({

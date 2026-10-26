@@ -5,6 +5,7 @@ import { waManager } from "@/lib/whatsapp/manager";
 import { emitRealtime } from "@/lib/realtime";
 import { isUploadAllowed, MAX_UPLOAD_BYTES, saveMediaFile } from "@/lib/media";
 import { canViewConversation, getSectorScope } from "@/lib/scope";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Envio de midia pelo atendente (multipart/form-data: file + caption)
 export async function POST(
@@ -103,6 +104,15 @@ export async function POST(
     type: "message:new",
     conversationId: id,
     message: { ...message, externalId: null, createdAt: message.createdAt, conversationStatus: conversation.status },
+  });
+
+  void auditLog({
+    action: AUDIT_ACTIONS.MIDIA_ENVIADA,
+    entity: "Conversation",
+    entityId: id,
+    detail: `arquivo ${message.fileName ?? mediaUrl} (${mime})${caption ? `: ${caption.slice(0, 60)}` : ""}`,
+    session,
+    req,
   });
 
   return NextResponse.json({

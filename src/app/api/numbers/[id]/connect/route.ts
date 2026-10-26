@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { waManager } from "@/lib/whatsapp/manager";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // POST = iniciar conexao (solicita QR)
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
@@ -18,12 +19,20 @@ export async function POST(
   if (!result) {
     return NextResponse.json({ error: "Falha ao iniciar a conexao. Verifique a internet/integração." }, { status: 500 });
   }
+  void auditLog({
+    action: AUDIT_ACTIONS.NUMERO_CONEXAO,
+    entity: "WhatsAppNumber",
+    entityId: id,
+    detail: "solicitado pareamento (QR)",
+    session,
+    req,
+  });
   return NextResponse.json(result);
 }
 
 // DELETE = desconectar (limpa a sessao, novo QR sera necessario)
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
@@ -31,5 +40,13 @@ export async function DELETE(
 
   const { id } = await params;
   await waManager.logout(id);
+  void auditLog({
+    action: AUDIT_ACTIONS.NUMERO_CONEXAO,
+    entity: "WhatsAppNumber",
+    entityId: id,
+    detail: "desconectado (sessao apagada)",
+    session,
+    req,
+  });
   return NextResponse.json({ ok: true });
 }

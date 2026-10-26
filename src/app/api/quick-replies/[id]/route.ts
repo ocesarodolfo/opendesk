@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -20,6 +21,7 @@ async function guardAdmin() {
 export async function PATCH(req: NextRequest, { params }: Params) {
   const guard = await guardAdmin();
   if (guard.error) return guard.error;
+  const session = guard.session;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -36,7 +38,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   try {
-    return NextResponse.json(await prisma.quickReply.update({ where: { id }, data }));
+    const reply = await prisma.quickReply.update({ where: { id }, data });
+    void auditLog({
+      action: AUDIT_ACTIONS.RESPOSTA_ATUALIZADA,
+      entity: "QuickReply",
+      entityId: id,
+      detail: `"/${reply.shortcut}"${data.active !== undefined ? ` active=${reply.active}` : ""}`,
+      session,
+      req,
+    });
+    return NextResponse.json(reply);
   } catch (error) {
     if (isNotFound(error)) {
       return NextResponse.json({ error: "Resposta inexistente." }, { status: 404 });
@@ -46,13 +57,21 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Params) {
+export async function DELETE(req: NextRequest, { params }: Params) {
   const guard = await guardAdmin();
   if (guard.error) return guard.error;
+  const session = guard.session;
 
   const { id } = await params;
   try {
     await prisma.quickReply.delete({ where: { id } });
+    void auditLog({
+      action: AUDIT_ACTIONS.RESPOSTA_EXCLUIDA,
+      entity: "QuickReply",
+      entityId: id,
+      session,
+      req,
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (isNotFound(error)) {

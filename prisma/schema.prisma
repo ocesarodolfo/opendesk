@@ -203,3 +203,31 @@ model ContactTag {
 
   @@id([contactId, tagId])
 }
+
+// ---------------------------------------------------------------------
+// AUDITORIA (trilha de acoes) — append-only, SEM FK: a trilha sobrevive
+// a exclusao de usuarios/conversas. actorName e snapshot denormalizado.
+// ---------------------------------------------------------------------
+model AuditLog {
+  id        String   @id @default(uuid())
+  // "LOGIN" | "CONVERSA_STATUS" | "MENSAGEM_ENVIADA" ... (ver src/lib/audit.ts)
+  action    String
+  // entidade afetada: "User" | "Conversation" | "Contact" | "WhatsAppNumber" | "Sector" | "Tag" | "QuickReply"
+  entity    String
+  entityId  String?
+  // resumo legivel: "status PENDING -> CLOSED", "atribuida a Maria", primeira linha da msg
+  detail    String?
+  // quem fez (null = sistema/boot)
+  actorId   String?
+  actorName String?
+  // contexto tecnico
+  ip        String?
+  userAgent String?
+  // JSON opcional com o antes/depois detalhado
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([entity, entityId, createdAt])
+}

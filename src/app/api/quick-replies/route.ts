@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { getSectorScope, type SectorScope } from "@/lib/scope";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Respostas rapidas: lista para uso no inbox.
 // AGENT ve as ativas de nivel empresa + dos seus setores; ADMIN ve tudo.
@@ -71,6 +72,14 @@ export async function POST(req: NextRequest) {
 
   const reply = await prisma.quickReply.create({
     data: { shortcut, content, sectorId },
+  });
+  void auditLog({
+    action: AUDIT_ACTIONS.RESPOSTA_CRIADA,
+    entity: "QuickReply",
+    entityId: reply.id,
+    detail: `"/${shortcut}" (setor: ${sectorId ?? "empresa"})`,
+    session,
+    req,
   });
   return NextResponse.json(reply, { status: 201 });
 }

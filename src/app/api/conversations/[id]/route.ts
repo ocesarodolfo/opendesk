@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { toConversationDTO } from "@/lib/dto";
 import { emitRealtime } from "@/lib/realtime";
 import { canChangeSector, canViewConversation, getSectorScope } from "@/lib/scope";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // include compartilhado (a chamada inline em findUnique reprovava no tsc 5.9)
 const conversationInclude = {
@@ -72,7 +73,7 @@ export async function PATCH(
 
   const existing = await prisma.conversation.findUnique({
     where: { id },
-    select: { sectorId: true },
+    select: { sectorId: true, status: true, assignedUserId: true },
   });
   if (!existing) return NextResponse.json({ error: "Conversa inexistente." }, { status: 404 });
 
@@ -125,5 +126,43 @@ export async function PATCH(
     sectorId: updated.sectorId,
     status: updated.status,
   });
+
+  // auditoria: registra o que efetivamente mudou
+  if (data.status && data.status !== existing.status) {
+    void auditLog({
+      action: AUDIT_ACTIONS.CONVERSA_STATUS,
+      entity: "Conversation",
+      entityId: id,
+      detail: `status ${existing.status} -> ${data.status}`,
+      session,
+      req,
+      metadata: { antes: existing.status, depois: data.status },
+    });
+  }
+  if (data.sectorId !== undefined && data.sectorId !== existing.sectorId) {
+    void auditLog({
+      action: AUDIT_ACTIONS.CONVERSA_SETOR,
+      entity: "Conversation",
+      entityId: id,
+      detail: `setor ${existing.sectorId ?? "-"} -> ${data.sectorId ?? "-"}`,
+      session,
+      req,
+      metadata: { antes: existing.sectorId, depois: data.sectorId },
+    });
+  }
+  if (
+    data.assignedUserId !== undefined &&
+    data.assignedUserId !== existing.assignedUserId
+  ) {
+    void auditLog({
+      action: AUDIT_ACTIONS.CONVERSA_ATRIBUICAO,
+      entity: "Conversation",
+      entityId: id,
+      detail: `atendente ${existing.assignedUserId ?? "-"} -> ${data.assignedUserId ?? "-"}`,
+      session,
+      req,
+      metadata: { antes: existing.assignedUserId, depois: data.assignedUserId },
+    });
+  }
   return NextResponse.json(toConversationDTO(updated));
 }

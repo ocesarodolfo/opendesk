@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, hashPassword, verifyPassword } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Troca a propria senha (usuario logado), exigindo a senha atual
 export async function PATCH(req: NextRequest) {
@@ -27,6 +28,15 @@ export async function PATCH(req: NextRequest) {
   await prisma.user.update({
     where: { id: user.id },
     data: { passwordHash: await hashPassword(newPassword) },
+  });
+
+  void auditLog({
+    action: AUDIT_ACTIONS.SENHA_TROCA,
+    entity: "User",
+    entityId: user.id,
+    detail: `troca da propria senha: ${user.name} <${user.email}>`,
+    session,
+    req,
   });
 
   return NextResponse.json({ ok: true });

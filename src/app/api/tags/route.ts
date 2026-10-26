@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Lista todas as etiquetas (qualquer usuario autenticado — usadas na Inbox)
 export async function GET() {
@@ -30,6 +31,14 @@ export async function POST(req: NextRequest) {
 
   try {
     const tag = await prisma.tag.create({ data: { name, color } });
+    void auditLog({
+      action: AUDIT_ACTIONS.ETIQUETA_CRIADA,
+      entity: "Tag",
+      entityId: tag.id,
+      detail: `"${name}" cor ${color}`,
+      session,
+      req,
+    });
     return NextResponse.json(tag, { status: 201 });
   } catch (error) {
     if (

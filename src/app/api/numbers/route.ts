@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { waManager } from "@/lib/whatsapp/manager";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Aplica o status "ao vivo" da sessao (manager) sobre o registrato no banco:
 // apos um restart do processo, CONNECTED no banco e stale ate a retomada.
@@ -58,6 +59,15 @@ export async function POST(req: NextRequest) {
 
   const whatsAppNumber = await prisma.whatsAppNumber.create({
     data: { label, sectorId, status: "DISCONNECTED" },
+  });
+
+  void auditLog({
+    action: AUDIT_ACTIONS.NUMERO_CRIADO,
+    entity: "WhatsAppNumber",
+    entityId: whatsAppNumber.id,
+    detail: `"${label}"`,
+    session,
+    req,
   });
 
   return NextResponse.json(

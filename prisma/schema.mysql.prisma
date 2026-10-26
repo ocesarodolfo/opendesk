@@ -1,0 +1,234 @@
+// =====================================================================
+// Modelo de dados - VARIANTE MySQL (producao / RDS)
+// docs/10-mysql-e-s3.md
+//
+// O Prisma fixa o provider no arquivo do schema: para nao migrar o
+// desenvolvimento (SQLite), este arquivo e' uma copia de prisma/schema.prisma
+// com provider mysql + tipos de coluna otimizados (@db.Text/@db.VarChar).
+//
+// Manutencao: toda mudanca de model deve ser aplicada nos DOIS arquivos.
+//
+// Uso (servidor de producao, servico PARADO):
+//   npm run db:generate:mysql   # regenera o PrismaClient para mysql
+//   npm run db:push:mysql       # cria/ajusta as tabelas no banco MySQL
+//   npm run db:migrate-to-mysql -- --yes   # copia os dados do SQLite (1x)
+// =====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// USUARIOS E SETORES
+// ---------------------------------------------------------------------
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  // "ADMIN" | "AGENT" (mantido como string — mesmo formato do SQLite)
+  role         String        @default("AGENT")
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  memberships           SectorMembership[]
+  assignedConversations Conversation[]    @relation("AssignedUser")
+}
+
+model Sector {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?  @db.Text
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  memberships   SectorMembership[]
+  numbers       WhatsAppNumber[]
+  conversations Conversation[]
+  quickReplies  QuickReply[]
+}
+
+model SectorMembership {
+  id        String   @id @default(uuid())
+  userId    String
+  sectorId  String
+  role      String   @default("AGENT") // reserva p/ futura granularidade (SUPERVISOR)
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sector Sector @relation(fields: [sectorId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sectorId])
+}
+
+// ---------------------------------------------------------------------
+// CANAIS / NUMEROS
+// ---------------------------------------------------------------------
+
+model WhatsAppNumber {
+  id        String   @id @default(uuid())
+  label     String
+  // Identificador real atribuido pelo WhatsApp apos o pareamento
+  phone     String?
+  jid       String?  @db.VarChar(255)
+  // "DISCONNECTED" | "CONNECTING" | "CONNECTED"
+  status    String   @default("DISCONNECTED")
+  // Ultimo erro reportado pela conexao (p/ diagnostico no painel)
+  lastError String?  @db.Text
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sector        Sector?  @relation(fields: [sectorId], references: [id])
+  sectorId      String?
+  conversations Conversation[]
+}
+
+// ---------------------------------------------------------------------
+// ATENDIMENTO
+// ---------------------------------------------------------------------
+
+model QuickReply {
+  id        String   @id @default(uuid())
+  shortcut  String
+  content   String   @db.Text // 4096 chars -> TEXT
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // null = disponivel em todos os setores (nivel empresa)
+  sector   Sector?  @relation(fields: [sectorId], references: [id])
+  sectorId String?
+
+  @@index([active, sectorId])
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  // Somente digitos, com DDI ex.: 5511999990000
+  // Para grupos, guarda os digitos do id do grupo (chave unica)
+  phone     String   @unique
+  name      String?  @db.VarChar(255)
+  pushName  String?  @db.VarChar(255)
+  // Grupo do WhatsApp (@g.us): conversa com varios participantes
+  isGroup   Boolean  @default(false)
+  // Ultimo jid remoto conhecido (conta nova usa "@lid"); responde por ele
+  jid       String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  conversations Conversation[]
+  tags          ContactTag[]
+}
+
+model Conversation {
+  id            String   @id @default(uuid())
+  // "PENDING" | "OPEN" | "CLOSED"
+  status        String   @default("PENDING")
+  lastMessageAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  // momento do encerramento (limpo ao reabrir) — usado nos relatorios
+  closedAt      DateTime?
+
+  contact          Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId        String
+  whatsappNumber   WhatsAppNumber @relation(fields: [whatsappNumberId], references: [id])
+  whatsappNumberId String
+  sector           Sector?        @relation(fields: [sectorId], references: [id])
+  sectorId         String?
+  assignedUser     User?          @relation("AssignedUser", fields: [assignedUserId], references: [id])
+  assignedUserId   String?
+
+  messages Message[]
+
+  @@index([status, lastMessageAt])
+  @@index([whatsappNumberId, contactId])
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  // "INCOMING" | "OUTGOING"
+  direction      String
+  content        String @db.Text // texto e/ou legenda (4096) -> TEXT
+  // Midia (v2): arquivo no STORAGE (MEDIA_DIR local ou S3) identificado por <mediaUrl>
+  mediaUrl       String?
+  mediaType      String? // mimetype ("image/jpeg", "audio/mp4"...)
+  fileName       String? @db.VarChar(255) // nome original de documentos
+  // "SENT" | "FAILED" (evolucoes: DELIVERED/READ)
+  status         String   @default("SENT")
+  // Id da mensagem no lado do WhatsApp (deduplicacao)
+  externalId     String?  @db.VarChar(255)
+  // Em grupos (@g.us): nome exibido do participante que enviou a mensagem
+  senderName     String?  @db.VarChar(255)
+  // Em grupos: jid do participante autor (necessario para reagir a mensagem dele)
+  senderJid      String?  @db.VarChar(255)
+  // Resposta citando outra mensagem (reply do WhatsApp)
+  quotedSnippet  String? @db.Text // texto/vista rapida da mensagem citada
+  quotedSender   String? @db.VarChar(255) // telefone de quem enviou a mensagem original
+  // Reacao (emoji) na mensagem — uma por mensagem (ultima vence)
+  reaction       String?
+  // true = reacao colocada pelo atendente (painel); false/undefined = do contato
+  reactionMine   Boolean?
+  createdAt      DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+
+  @@index([conversationId, createdAt])
+}
+
+// ---------------------------------------------------------------------
+// ETIQUETAS (TAGS) DE CONTATO
+// ---------------------------------------------------------------------
+
+model Tag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  color     String   @default("slate") // emerald | sky | amber | rose | violet | slate
+  createdAt DateTime @default(now())
+
+  contacts ContactTag[]
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+}
+
+// ---------------------------------------------------------------------
+// AUDITORIA (trilha de acoes) — append-only, SEM FK: a trilha sobrevive
+// a exclusao de usuarios/conversas. actorName e snapshot denormalizado.
+// ---------------------------------------------------------------------
+model AuditLog {
+  id        String   @id @default(uuid())
+  // "LOGIN" | "CONVERSA_STATUS" | "MENSAGEM_ENVIADA" ... (ver src/lib/audit.ts)
+  action    String
+  // entidade afetada: "User" | "Conversation" | "Contact" | "WhatsAppNumber" | "Sector" | "Tag" | "QuickReply"
+  entity    String
+  entityId  String?
+  // resumo legivel (ate 500) -> VARCHAR(500)
+  detail    String?  @db.VarChar(500)
+  // quem fez (null = sistema/boot)
+  actorId   String?
+  actorName String?
+  // contexto tecnico
+  ip        String?
+  userAgent String?  @db.VarChar(255)
+  // JSON opcional com o antes/depois detalhado (ate 4KB) -> TEXT
+  metadata  String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([entity, entityId, createdAt])
+}

@@ -41,6 +41,7 @@
 | Sessão de usuário | **JWT via `jose`**, cookie `httpOnly` | Sem estado no servidor; `SameSite=Lax` + `secure` em produção |
 | Senhas | **bcryptjs** (cost 12) | Padrão sólido |
 | Persistência da sessão WhatsApp | **`useMultiFileAuthState`** (arquivos em `./sessions/<id>`) | Sobrevive a restart do Node sem novo QR |
+| Tipografia da UI | **Fonte mínima 12px (`text-xs`)** | Legibilidade; nada de `text-[10px]`/`text-[11px]` em telas novas — quando faltar espaço, ajusta-se o espaçamento, não a fonte |
 
 ## Componentes-chave
 

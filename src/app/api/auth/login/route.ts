@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createSession, verifyPassword } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // ---------------------------------------------------------------------------
 // Rate limit simples do login (em memoria, por processo):
@@ -40,6 +41,12 @@ export async function POST(req: NextRequest) {
   const ip = clientIp(req);
   const limit = checkRateLimit(ip);
   if (!limit.allowed) {
+    void auditLog({
+      action: AUDIT_ACTIONS.LOGIN_FALHA,
+      entity: "User",
+      detail: "login bloqueado: rate limit estourado",
+      req,
+    });
     return NextResponse.json(
       {
         error: `Muitas tentativas de login. Tente novamente em ${Math.ceil(limit.retryAfterSec / 60)} minuto(s).`,
@@ -60,17 +67,39 @@ export async function POST(req: NextRequest) {
   // Mensagem generica: nao revela se o e-mail existe
   if (!user || !user.active) {
     registerFailure(ip);
+    void auditLog({
+      action: AUDIT_ACTIONS.LOGIN_FALHA,
+      entity: "User",
+      detail: `credenciais invalidas: ${email}`,
+      req,
+    });
     return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
   }
 
   const ok = await verifyPassword(user.passwordHash, password);
   if (!ok) {
     registerFailure(ip);
+    void auditLog({
+      action: AUDIT_ACTIONS.LOGIN_FALHA,
+      entity: "User",
+      entityId: user.id,
+      detail: `senha incorreta: ${email}`,
+      req,
+    });
     return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
   }
 
   // login ok: limpa contador do IP
   attempts.delete(ip);
+
+  void auditLog({
+    action: AUDIT_ACTIONS.LOGIN,
+    entity: "User",
+    entityId: user.id,
+    detail: `login OK: ${email} (${user.role})`,
+    session: { sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" },
+    req,
+  });
 
   await createSession({ sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" });
   return NextResponse.json({ ok: true });

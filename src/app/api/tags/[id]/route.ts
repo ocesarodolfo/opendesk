@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Renomeia / recolor etiqueta global (apenas ADMIN)
 export async function PATCH(
@@ -34,6 +35,14 @@ export async function PATCH(
       data,
       select: { id: true, name: true, color: true },
     });
+    void auditLog({
+      action: AUDIT_ACTIONS.ETIQUETA_ATUALIZADA,
+      entity: "Tag",
+      entityId: id,
+      detail: `"${tag.name}" cor ${tag.color}`,
+      session,
+      req,
+    });
     return NextResponse.json(tag);
   } catch (error) {
     const code = error && typeof error === "object" ? (error as { code?: string }).code : "";
@@ -48,7 +57,7 @@ export async function PATCH(
 
 // Exclui etiqueta global (apenas ADMIN) — desvincula dos contatos automaticamente
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
@@ -60,6 +69,13 @@ export async function DELETE(
   const { id } = await params;
   try {
     await prisma.tag.delete({ where: { id } });
+    void auditLog({
+      action: AUDIT_ACTIONS.ETIQUETA_EXCLUIDA,
+      entity: "Tag",
+      entityId: id,
+      session,
+      req,
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (

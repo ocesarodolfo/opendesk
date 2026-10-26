@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { emitRealtime } from "@/lib/realtime";
 import { canViewConversation, getSectorScope } from "@/lib/scope";
 import { waManager } from "@/lib/whatsapp/manager";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // ---------------------------------------------------------------------------
 // Reagir a uma mensagem da conversa (envia a reacao pelo WhatsApp e grava).
@@ -83,5 +84,15 @@ export async function POST(
     sectorId: conversation.sectorId,
     message: { id: updated.id, reaction: updated.reaction, reactionMine: updated.reactionMine },
   });
+
+  void auditLog({
+    action: AUDIT_ACTIONS.REACAO,
+    entity: "Message",
+    entityId: updated.id,
+    detail: `${removing ? "removida" : "adicionada"}: ${emoji} (conversa ${id})`,
+    session,
+    req,
+  });
+
   return NextResponse.json(updated);
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function GET() {
   const session = await getSession();
@@ -27,6 +28,14 @@ export async function POST(req: NextRequest) {
   try {
     const sector = await prisma.sector.create({
       data: { name, description: body.description ?? null },
+    });
+    void auditLog({
+      action: AUDIT_ACTIONS.SETOR_CRIADO,
+      entity: "Sector",
+      entityId: sector.id,
+      detail: `"${name}"`,
+      session,
+      req,
     });
     return NextResponse.json(sector, { status: 201 });
   } catch {

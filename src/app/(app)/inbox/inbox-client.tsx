@@ -542,7 +542,7 @@ export default function InboxClient() {
           </div>
           {bulkMode && (
             <div className="mt-2 rounded-md border border-violet-200 bg-violet-50 p-2">
-              <p className="text-[11px] font-semibold text-violet-700">
+              <p className="text-xs font-semibold text-violet-700">
                 {bulkSelected.size} conversa(s) selecionada(s) — clique para marcar
               </p>
               <div className="mt-1.5 flex items-center gap-1">
@@ -589,7 +589,7 @@ export default function InboxClient() {
                   {item.contactName || item.contactPhone}
                 </span>
                 <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
                     STATUS_META[item.status].chip
                   }`}
                 >
@@ -602,7 +602,7 @@ export default function InboxClient() {
               <p className="mt-1 truncate text-xs text-slate-600">
                 {item.status !== "CLOSED" ? (item.lastMessage || "(sem texto)") : ""}
               </p>
-              <p className="mt-1 text-[10px] text-slate-400">
+              <p className="mt-1 text-xs text-slate-400">
                 {new Date(item.lastMessageAt).toLocaleString("pt-BR")}
               </p>
             </button>
@@ -653,7 +653,7 @@ export default function InboxClient() {
                     {c?.contactIsGroup ? "👥 " : ""}
                     {c?.contactName || c?.contactPhone}
                     {c?.contactIsGroup ? (
-                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
                         Grupo
                       </span>
                     ) : null}
@@ -679,7 +679,7 @@ export default function InboxClient() {
                   {(c?.contactTags ?? []).map((t) => (
                     <span
                       key={t.id}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
                         TAG_CHIP[t.color] ?? TAG_CHIP.slate
                       }`}
                     >
@@ -707,7 +707,7 @@ export default function InboxClient() {
                       autoFocus
                       list="tag-options"
                       placeholder="Nova etiqueta + Enter"
-                      className="w-40 rounded-md border border-sky-400 px-2 py-0.5 text-[11px] focus:outline-none"
+                      className="w-40 rounded-md border border-sky-400 px-2 py-0.5 text-xs focus:outline-none"
                     />
                     <datalist id="tag-options">
                       {tagOptions.map((t) => (
@@ -722,7 +722,7 @@ export default function InboxClient() {
                         setTagEditing(true);
                       }}
                       title="Adicionar etiqueta ao contato"
-                      className="rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-[10px] text-slate-400 hover:border-sky-400 hover:text-sky-600"
+                      className="rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-400 hover:border-sky-400 hover:text-sky-600"
                     >
                       ＋ etiqueta
                     </button>
@@ -846,10 +846,10 @@ export default function InboxClient() {
                         }}
                         className="block w-full border-b border-slate-100 px-3 py-2 text-left hover:bg-sky-50"
                       >
-                        <span className="font-mono text-[11px] font-semibold text-sky-700">
+                        <span className="font-mono text-xs font-semibold text-sky-700">
                           {r.shortcut}
                         </span>
-                        <span className="ml-2 text-[11px] text-slate-400">{r.sectorName ?? "todos"}</span>
+                        <span className="ml-2 text-xs text-slate-400">{r.sectorName ?? "todos"}</span>
                         <p className="truncate text-xs text-slate-600">{r.content}</p>
                       </button>
                     ))
@@ -1008,7 +1008,7 @@ function ImageViewer({ src, onClose }: { src: string; onClose: () => void }) {
       </div>
 
       {/* dica de uso */}
-      <p className="viewer-btn absolute bottom-5 left-4 hidden px-3 py-1.5 text-[11px] md:block">
+      <p className="viewer-btn absolute bottom-5 left-4 hidden px-3 py-1.5 text-xs md:block">
         roda = zoom · arraste = mover · duplo clique = reset
       </p>
     </div>
@@ -1139,21 +1139,21 @@ function MessageBubble({
           {/* resposta citando outra mensagem ("responder" do WhatsApp) */}
           {message.quotedSnippet ? (
             <div className="mb-1 rounded-l border-l-4 border-slate-400 bg-slate-100 px-2 py-1">
-              <p className="text-[10px] font-semibold text-slate-600">
+              <p className="text-xs font-semibold text-slate-600">
                 {message.quotedSender ? formatPhone(message.quotedSender) : "Mensagem citada"}
               </p>
-              <p className="whitespace-pre-wrap break-words text-[11px] text-slate-600">
+              <p className="whitespace-pre-wrap break-words text-xs text-slate-600">
                 {message.quotedSnippet}
               </p>
             </div>
           ) : null}
           {/* grupo: nome do participante que enviou (nao aparece nas suas) */}
           {!isOut && message.senderName ? (
-            <p className="mb-0.5 text-[11px] font-semibold text-sky-700">{message.senderName}</p>
+            <p className="mb-0.5 text-xs font-semibold text-sky-700">{message.senderName}</p>
           ) : null}
           {body}
           <p
-            className={`mt-1 text-right text-[10px] ${
+            className={`mt-1 text-right text-xs ${
               message.status === "FAILED" ? "font-semibold text-rose-600" : "text-slate-500"
             }`}
           >
@@ -1169,7 +1169,7 @@ function MessageBubble({
           <button
             onClick={() => onReact?.(message, message.reaction ?? "")}
             title="Reação — clique para remover"
-            className={`absolute bottom-0 flex items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] shadow-sm ${
+            className={`absolute bottom-0 flex items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-xs shadow-sm ${
               isOut ? "-left-2" : "-right-2"
             }`}
           >

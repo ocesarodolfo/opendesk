@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession, hashPassword } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function GET() {
   const session = await getSession();
@@ -48,6 +49,14 @@ export async function POST(req: NextRequest) {
   try {
     const user = await prisma.user.create({
       data: { name, email, passwordHash: await hashPassword(password), role },
+    });
+    void auditLog({
+      action: AUDIT_ACTIONS.USUARIO_CRIADO,
+      entity: "User",
+      entityId: user.id,
+      detail: `${user.name} <${user.email}> papel ${user.role}`,
+      session,
+      req,
     });
     return NextResponse.json(
       { id: user.id, name: user.name, email: user.email, role: user.role, active: user.active },

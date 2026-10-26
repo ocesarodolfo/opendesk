@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Renomear contato (atendentes e admin; o nome padrao e o pushName do WhatsApp)
 export async function PATCH(
@@ -51,6 +52,28 @@ export async function PATCH(
         tags: { select: { tag: { select: { id: true, name: true, color: true } } } },
       },
     });
+    if (name !== undefined) {
+      void auditLog({
+        action: AUDIT_ACTIONS.CONTATO_RENOME,
+        entity: "Contact",
+        entityId: contact.id,
+        detail: `nome "${name ?? contact.pushName ?? "-"}" (pushName: ${contact.pushName ?? "-"})`,
+        session,
+        req,
+      });
+    }
+    if (tagIds !== undefined) {
+      void auditLog({
+        action: AUDIT_ACTIONS.CONTATO_ETIQUETAS,
+        entity: "Contact",
+        entityId: contact.id,
+        detail: `etiquetas: ${contact.tags.map((t) => t.tag.name).join(", ") || "-"}`,
+        session,
+        req,
+        metadata: { tagIds },
+      });
+    }
+
     return NextResponse.json({
       ...contact,
       tags: contact.tags.map((t) => t.tag),

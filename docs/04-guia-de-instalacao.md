@@ -53,11 +53,18 @@ npm run db:studio   # inspeção visual do banco (http://localhost:5555)
 
 | Variável | Descrição |
 |---|---|
-| `DATABASE_URL` | SQLite: `file:./data/app.db` (relativa à pasta `prisma/`) |
+| `DATABASE_URL` | SQLite: `file:./data/app.db` (relativa à pasta `prisma/`) — MySQL em produção, ver `docs/10` |
 | `JWT_SECRET` | Segredo mínimo de 32 caracteres para assinar sessões |
 | `SESSIONS_DIR` | Pasta das credenciais do WhatsApp (default `./sessions`) |
+| `STORAGE_DRIVER` | `local` (default, dev) ou `s3` (produção) — ver `docs/10-mysql-e-s3.md` |
+| `MEDIA_DIR` | Pasta das mídias quando `STORAGE_DRIVER=local` (default `./media`) |
+| `S3_BUCKET` / `S3_REGION` / `S3_PREFIX` / `S3_ENDPOINT` | Config S3 (só quando driver `s3`) |
 
 ## Produção (setup simples, VPS Linux)
+
+> Com MySQL e/ou S3: leia `docs/10-mysql-e-s3.md` — os passos mudam para
+> `db:generate:mysql` + `db:push:mysql` (+ migração de dados) e as mídias
+> vão para um bucket privado com `STORAGE_DRIVER=s3`.
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm  # Node 20+

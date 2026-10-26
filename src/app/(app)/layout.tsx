@@ -1,7 +1,7 @@
 import { requireSession } from "@/lib/auth";
 import Link from "next/link";
+import UserMenu from "./user-menu";
 import LogoutButton from "./logout-button";
-import ThemeToggle from "./theme-toggle";
 
 const NAV = [
   { href: "/inbox", label: "Inbox", adminOnly: false },
@@ -11,7 +11,6 @@ const NAV = [
   { href: "/setores", label: "Setores", adminOnly: true },
   { href: "/respostas", label: "Respostas rápidas", adminOnly: true },
   { href: "/usuarios", label: "Usuários", adminOnly: true },
-  { href: "/conta", label: "Minha conta", adminOnly: false },
 ];
 
 export default async function AppLayout({
@@ -38,13 +37,9 @@ export default async function AppLayout({
             </Link>
           ))}
         </nav>
-        <div className="border-t border-slate-800 px-5 py-4">
-          <p className="truncate text-sm font-medium text-white">{session.name}</p>
-          <p className="text-xs text-slate-500">
-            {session.role === "ADMIN" ? "Administrador" : "Atendente"}
-          </p>
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <ThemeToggle />
+        <div className="border-t border-slate-800 px-4 py-4">
+          <div className="flex items-center gap-2">
+            <UserMenu name={session.name} role={session.role} />
             <LogoutButton />
           </div>
         </div>

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { getSupervisorSectorIds } from "@/lib/scope";
 import { emitRealtime } from "@/lib/realtime";
+import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
 
 // Atribuicao EM LOTE (poder de SUPERVISOR do setor ou ADMIN).
 // Body: { conversationIds: string[], assignedUserId: string | null }
@@ -78,6 +79,15 @@ export async function PATCH(req: NextRequest) {
   for (const id of targetIds) {
     emitRealtime({ type: "conversation:update", conversationId: id });
   }
+
+  void auditLog({
+    action: AUDIT_ACTIONS.CONVERSA_LOTE,
+    entity: "Conversation",
+    detail: `${targetIds.length} conversa(s) atribuida(s) a ${assignedUserId ?? "-"}`,
+    session,
+    req,
+    metadata: { ids: targetIds, assignedUserId },
+  });
 
   return NextResponse.json({ updated: targetIds.length });
 }
