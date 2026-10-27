@@ -26,7 +26,6 @@ export async function POST(
 
   const file = form.get("file");
   const caption = typeof form.get("caption") === "string" ? (form.get("caption") as string).trim().slice(0, 1024) : "";
-
   if (!(file instanceof globalThis.File)) {
     return NextResponse.json({ error: "Arquivo ausente." }, { status: 400 });
   }
@@ -43,7 +42,7 @@ export async function POST(
 
   const conversation = await prisma.conversation.findUnique({
     where: { id },
-    include: { contact: true },
+    include: { contact: true, whatsappNumber: true },
   });
   if (!conversation) return NextResponse.json({ error: "Conversa inexistente." }, { status: 404 });
   if (conversation.status === "CLOSED") {
@@ -53,6 +52,11 @@ export async function POST(
   if (!canViewConversation(scope, conversation.sectorId)) {
     return NextResponse.json({ error: "Sem permissao para esta conversa." }, { status: 403 });
   }
+
+  // prefixo do atendente em LINHA PROPRIA (legenda desce p/ 2a linha);
+  // se a legenda ficar vazia, sai o prefixo sozinho assim mesmo
+  const prefix = conversation.whatsappNumber.prefixAgent ? `[${session.name}]\n` : "";
+  const fullCaption = caption ? `${prefix}${caption}` : conversation.whatsappNumber.prefixAgent ? prefix.trim() : "";
 
   // grava arquivo ANTES do envio (a bolha do inbox precisa dele)
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -68,11 +72,15 @@ export async function POST(
     data: {
       conversationId: id,
       direction: "OUTGOING",
-      content: caption,
+      content: fullCaption,
       mediaUrl,
       mediaType: mime,
       fileName: file.name || null,
       status: "SENT",
+      groupKey:
+        typeof form.get("groupKey") === "string"
+          ? (form.get("groupKey") as string).slice(0, 64) || null
+          : null,
     },
   });
 
@@ -82,7 +90,7 @@ export async function POST(
       conversation.contact.phone,
       buffer,
       mime,
-      caption,
+      fullCaption,
       file.name,
       conversation.contact.jid
     );

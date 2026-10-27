@@ -53,8 +53,13 @@ export async function GET(
       senderName: m.senderName,
       quotedSnippet: m.quotedSnippet,
       quotedSender: m.quotedSender,
+      quotedSenderName: m.quotedSenderName,
+      forwarded: m.forwarded,
       reaction: m.reaction,
       reactionMine: m.reactionMine,
+      deleted: m.deleted,
+      groupKey: m.groupKey,
+      externalId: m.externalId,
       createdAt: m.createdAt.toISOString(),
     })),
   });

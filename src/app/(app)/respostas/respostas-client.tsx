@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { showToast } from "@/components/toast";
 
 type SectorOption = { id: string; name: string; active: boolean };
 
@@ -65,7 +66,7 @@ export default function RespostasClient() {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      alert(data?.error ?? "Acao nao permitida.");
+      showToast(data?.error ?? "Acao nao permitida.", "erro");
       return;
     }
     setEditing(null);
@@ -76,7 +77,7 @@ export default function RespostasClient() {
     if (!confirm(`Excluir a resposta "${item.shortcut}"?`)) return;
     const res = await fetch(`/api/quick-replies/${item.id}`, { method: "DELETE" });
     if (res.ok) await load();
-    else alert("Nao foi possivel excluir.");
+    else showToast("Nao foi possivel excluir.", "erro");
   }
 
   return (
@@ -252,3 +253,4 @@ export default function RespostasClient() {
     </div>
   );
 }
+

@@ -34,6 +34,7 @@ export async function GET() {
         lastError: n.lastError,
         sectorId: n.sectorId,
         sectorName: n.sector?.name ?? null,
+        prefixAgent: n.prefixAgent,
       };
     })
   );
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
       lastError: null,
       sectorId: whatsAppNumber.sectorId,
       sectorName: null,
+      prefixAgent: whatsAppNumber.prefixAgent,
     },
     { status: 201 }
   );

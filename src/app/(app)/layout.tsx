@@ -2,6 +2,8 @@ import { requireSession } from "@/lib/auth";
 import Link from "next/link";
 import UserMenu from "./user-menu";
 import LogoutButton from "./logout-button";
+import InboxUnreadBadge from "@/components/inbox-unread-badge";
+import { ToastHost } from "@/components/toast";
 
 const NAV = [
   { href: "/inbox", label: "Inbox", adminOnly: false },
@@ -31,9 +33,11 @@ export default async function AppLayout({
             <Link
               key={item.href}
               href={item.href}
-              className="block rounded-md px-3 py-2 text-sm hover:bg-slate-800 hover:text-white"
+              className="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-slate-800 hover:text-white"
             >
-              {item.label}
+              <span>{item.label}</span>
+              {/* nao lidas: badge verde, como as bolhas do WhatsApp */}
+              {item.href === "/inbox" ? <InboxUnreadBadge /> : null}
             </Link>
           ))}
         </nav>
@@ -44,7 +48,10 @@ export default async function AppLayout({
           </div>
         </div>
       </aside>
-      <main className="ml-60 flex-1 p-8">{children}</main>
+      <main className="ml-60 flex-1 p-8">
+        {children}
+        <ToastHost />
+      </main>
     </div>
   );
 }

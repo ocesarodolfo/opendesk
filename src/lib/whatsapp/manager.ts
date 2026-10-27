@@ -52,7 +52,15 @@ type IncomingMessage = {
 };
 
 // mensagem citada (reply do WhatsApp) reduzida para exibicao
-type QuotedInfo = { snippet: string; sender: string };
+type QuotedInfo = {
+  snippet: string;
+  // digitos do autor da mensagem citada (PN quando o WhatsApp informa;
+  // senao LID). Pode nao ser formatavel como telefone — exidade no UI
+  sender: string | null;
+  // digitos normalizados do jid do autor (p/ casar com mensagens anteriores
+  // da mesma conversa e resolver o nome de quem falou)
+  senderJidDigits: string | null;
+};
 
 type IncomingMedia = { mime: string; caption: string; fileName: string };
 
@@ -182,6 +190,26 @@ function quotedMediaLabel(m: NonNullable<IncomingMessage["message"]>): string {
 }
 
 /**
+ * Mensagem encaminhada: contextInfo.isForwarded / forwardingScore > 0 em
+ * qualquer corpo (o WhatsApp marca com a etiqueta "Encaminhada").
+ */
+function detectForwarded(msg: IncomingMessage): boolean {
+  const m = msg.message;
+  if (!m) return false;
+  const cis = [
+    m.extendedTextMessage?.contextInfo,
+    m.imageMessage?.contextInfo,
+    m.videoMessage?.contextInfo,
+    m.documentMessage?.contextInfo,
+    m.audioMessage?.contextInfo,
+  ] as unknown[];
+  return cis.some((ci) => {
+    const c = ci as { isForwarded?: boolean; forwardingScore?: number } | null | undefined;
+    return c?.isForwarded === true || (c?.forwardingScore ?? 0) > 0;
+  });
+}
+
+/**
  * Extrai a mensagem citada (reply) de qualquer tipo que carregue contextInfo.
  * Devolve trecho curto para exibir na bolha + telefone real de quem falou.
  */
@@ -219,8 +247,16 @@ function extractQuote(msg: IncomingMessage): QuotedInfo | null {
   const trimmed = snippet.trim().slice(0, 200);
   if (!trimmed) return null;
 
-  const senderJid = ci?.participantPn || ci?.participant || "";
-  return { snippet: trimmed, sender: digitsOnly(senderJid.split("@")[0]) };
+  // autor da mensagem citada: PN real primeiro (era LID: o participant costuma
+  // ser "@lid"); corta o device (":25") antes dos digitos
+  const pnJid = ci?.participantPn || "";
+  const anyJid = pnJid || ci?.participant || "";
+  const senderDigits = anyJid ? digitsOnly(anyJid.split("@")[0].split(":")[0]) : "";
+  return {
+    snippet: trimmed,
+    sender: senderDigits || null,
+    senderJidDigits: senderDigits || null,
+  };
 }
 
 /**
@@ -427,11 +463,47 @@ export const waManager = {
     socket.ev.on("creds.update", saveCreds);
 
     socket.ev.on("connection.update", (update) => {
+      if (update.connection || update.lastDisconnect || update.qr) {
+        console.log(
+          `[wa-debug] connection.update de ${numberId}:`,
+          JSON.stringify({
+            connection: update.connection,
+            lastDisconnect: update.lastDisconnect?.error
+              ? update.lastDisconnect.error instanceof Error
+                ? update.lastDisconnect.error.message
+                : (update.lastDisconnect.error as unknown)
+              : undefined,
+            qr: !!update.qr,
+          })
+        );
+      }
       void this.handleConnectionUpdate(numberId, session, update);
     });
 
     socket.ev.on("messages.upsert", (upsert) => {
+      console.log(`[wa-debug] messages.upsert de ${numberId}: type=${upsert.type} count=${upsert.messages.length}`);
       void this.handleMessagesUpsert(numberId, upsert);
+    });
+
+    // checks do WhatsApp (mensagens que o painel enviou):
+    // chat 1:1 chega como messages.update (update.status) — 2=server, 3=entregue, 4=lido
+    socket.ev.on("messages.update", (updates) => {
+      for (const { key, update } of updates) {
+        if (!key?.id) continue;
+        const s = update?.status as number | undefined;
+        if (s === 2) void this.applyStatus(numberId, key.id, "SENT");
+        else if (s === 3) void this.applyStatus(numberId, key.id, "DELIVERED");
+        else if (s === 4 || s === 5) void this.applyStatus(numberId, key.id, "READ");
+      }
+    });
+
+    // grupos: receipts por participante chegam como message-receipt.update
+    socket.ev.on("message-receipt.update", (updates) => {
+      for (const { key, receipt } of updates) {
+        if (!key?.id) continue;
+        if (receipt?.readTimestamp) void this.applyStatus(numberId, key.id, "READ");
+        else if (receipt?.receiptTimestamp) void this.applyStatus(numberId, key.id, "DELIVERED");
+      }
     });
 
     return { status: session.status };
@@ -518,6 +590,9 @@ export const waManager = {
       try {
         const jid = msg.key.remoteJid ?? "";
         if (!jid || jid.endsWith("@status") || jid.endsWith("@newsletter")) continue;
+        console.log(
+          `[wa-debug] msg: jid=${jid} fromMe=${msg.key.fromMe} ts=${messageTimestampMs(msg)} id=${msg.key.id}`
+        );
 
         // Grupos (@g.us) sao suportados: o contato e o propio grupo
         // e cada mensagem guarda o participante que falou (senderName).
@@ -541,6 +616,12 @@ export const waManager = {
         // reacoes chegam como protocolMessage (type = 3): atualizam a
         // mensagem original e nao criam registros novos
         const protocol = msg.message?.protocolMessage;
+        // REVOKE (type = 0): o contato apagou mensagens dele(s) "para todos";
+        // o painel reforma visualmente a mensagem como "(mensagem apagada)"
+        if (protocol && protocol.type === 0 && protocol.key?.id) {
+          await this.applyRevocation(numberId, msg);
+          continue;
+        }
         if (protocol && protocol.type === 3 && protocol.key?.id) {
           await this.applyReaction(numberId, msg);
           continue;
@@ -551,7 +632,10 @@ export const waManager = {
         // senderPn) usamos ele como chave do contato; o jid LID fica em
         // Contact.jid para as respostas.
         const phone = resolvePhone(msg, jid, isGroup);
-        if (!phone) continue;
+        if (!phone) {
+          console.log(`[wa-debug] mensagem SEM telefone resolvivel: jid=${jid} fromMe=${msg.key.fromMe}`);
+          continue;
+        }
 
         const text = extractText(msg);
         const media = extractMedia(msg);
@@ -559,13 +643,105 @@ export const waManager = {
 
         // historico antigo (sync do pareamento) nao entra no inbox
         const ageMs = Date.now() - messageTimestampMs(msg);
-        if (ageMs > MAX_BACKFILL_AGE_MS) continue;
+        if (ageMs > MAX_BACKFILL_AGE_MS) {
+          console.log(
+            `[wa-debug] mensagem pulada por idade (${Math.round(ageMs / 3600000)}h): jid=${jid} fromMe=${msg.key.fromMe}`
+          );
+          continue;
+        }
 
         await this.ingestMessage(numberId, msg, jid, phone, text, media, isGroup);
       } catch (error) {
         console.error("[whatsapp] erro ao processar mensagem:", error);
       }
     }
+  },
+
+  /**
+   * Efetua o "Apagar para todos" no lado do WhatsApp (protocolo REVOKE) —
+   * chamado pela rota da API, que grava/marca no banco depois do sucesso.
+   * @param participantJid em grupos: jid do participante autor da mensagem
+   */
+  async deleteMessage(
+    numberId: string,
+    chatJid: string,
+    externalId: string,
+    fromMe: boolean,
+    participantJid: string | null
+  ): Promise<void> {
+    const session = sessions.get(numberId);
+    if (!session || session.status !== "CONNECTED") {
+      throw new Error("Numero WhatsApp nao conectado");
+    }
+    await session.socket.sendMessage(
+      chatJid,
+      {
+        delete: {
+          remoteJid: chatJid,
+          id: externalId,
+          fromMe,
+          ...(participantJid ? { participant: participantJid } : {}),
+        },
+      } as never
+    );
+  },
+
+  /**
+   * O contato apagou mensagem dele "para todos" (chega como REVOKE):
+   * o registro existente passa a exibir "(mensagem apagada)" no painel.
+   */
+  async applyRevocation(numberId: string, msg: IncomingMessage) {
+    const pm = msg.message?.protocolMessage;
+    if (!pm?.key?.id) return;
+    const target = await prisma.message.findFirst({
+      where: { externalId: pm.key.id, conversation: { whatsappNumberId: numberId } },
+      select: { id: true, conversationId: true, deleted: true },
+    });
+    if (!target || target.deleted) return;
+    await prisma.message.update({
+      where: { id: target.id },
+      data: { deleted: true },
+    });
+    const conv = await prisma.conversation.findUnique({
+      where: { id: target.conversationId },
+      select: { sectorId: true },
+    });
+    emitRealtime({
+      type: "message:update",
+      conversationId: target.conversationId,
+      sectorId: conv?.sectorId ?? null,
+      message: { id: target.id, deleted: true },
+    });
+  },
+
+  /**
+   * Status "ao vivo" de uma mensagem enviada pelo painel, o check do WhatsApp:
+   * SENT (1 visto) -> DELIVERED (2 vistos) -> READ (2 vistos azuis).
+   * 1:1 chega via `messages.update` (update.status) e grupos via
+   * `message-receipt.update` (receiptTimestamp / readTimestamp).
+   * Monotonica: nunca rebaixa READ para DELIVERED.
+   */
+  async applyStatus(numberId: string, externalId: string, status: string) {
+    const STATUS_RANK: Record<string, number> = { SENT: 0, DELIVERED: 1, READ: 2, FAILED: 2 };
+    const target = await prisma.message.findFirst({
+      where: { externalId, direction: "OUTGOING", conversation: { whatsappNumberId: numberId } },
+      select: { id: true, conversationId: true, status: true },
+    });
+    if (!target) return; // fora do historico importado
+    if ((STATUS_RANK[status] ?? 0) <= (STATUS_RANK[target.status] ?? 0)) return;    await prisma.message.update({
+      where: { id: target.id },
+      data: { status },
+    });
+    const conv = await prisma.conversation.findUnique({
+      where: { id: target.conversationId },
+      select: { sectorId: true },
+    });
+    emitRealtime({
+      type: "message:update",
+      conversationId: target.conversationId,
+      sectorId: conv?.sectorId ?? null,
+      message: { id: target.id, status },
+    });
   },
 
   /**
@@ -616,6 +792,7 @@ export const waManager = {
   ) {
     const direction = msg.key.fromMe ? "OUTGOING" : "INCOMING";
     const createdAt = new Date(messageTimestampMs(msg));
+    const session = sessions.get(numberId) ?? null;
 
     // idempotencia: o WA reenvia a mesma mensagem (sync + entregas posteriores)
     if (msg.key.id) {
@@ -696,7 +873,35 @@ export const waManager = {
 
     // 4) mensagem
     const quoted = extractQuote(msg);
-    const message = await prisma.message.create({
+    // resposta citando outra mensagem ("responder" do WhatsApp)
+    // 4a) nome de quem falou a msg citada: grupos -> nome do participante
+    // obtido de mensagens anteriores da MESMA conversa; 1:1 -> o nome do
+    // contato (a citacao dele vem sempre sem PN util); autor = nosso numero
+    // (copiado do celular) -> "Você"
+    let quotedSenderName: string | null = null;
+    if (quoted?.senderJidDigits) {
+      if (
+        (session?.selfPnDigits && quoted.senderJidDigits === session.selfPnDigits) ||
+        (session?.selfLidDigits && quoted.senderJidDigits === session.selfLidDigits)
+      ) {
+        quotedSenderName = "Você";
+      } else if (isGroup) {
+        const hit = await prisma.message.findFirst({
+          where: {
+            conversationId: conversation.id,
+            senderName: { not: null },
+            senderJid: { contains: quoted.senderJidDigits },
+          },
+          orderBy: { createdAt: "desc" },
+          select: { senderName: true },
+        });
+        quotedSenderName = hit?.senderName ?? null;
+      } else {
+        quotedSenderName = contact.name ?? null;
+      }
+    }
+
+    const created = await prisma.message.create({
       data: {
         conversationId: conversation.id,
         direction,
@@ -717,7 +922,9 @@ export const waManager = {
         senderJid: isGroup && !msg.key.fromMe ? (msg.key.participant ?? null) : null,
         // resposta citando outra mensagem ("responder" do WhatsApp)
         quotedSnippet: quoted?.snippet ?? null,
+        forwarded: detectForwarded(msg),
         quotedSender: quoted?.sender ?? null,
+        quotedSenderName,
         createdAt,
       },
     });
@@ -735,7 +942,7 @@ export const waManager = {
       type: "message:new",
       conversationId: conversation.id,
       sectorId: conversation.sectorId,
-      message: { ...message, conversationStatus: wasClosed ? "PENDING" : conversation.status },
+      message: { ...created, conversationStatus: wasClosed ? "PENDING" : conversation.status },
     });
     emitRealtime({
       type: "conversation:update",

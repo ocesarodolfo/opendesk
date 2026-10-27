@@ -11,6 +11,7 @@ export type NumberItem = {
   lastError: string | null;
   sectorId: string | null;
   sectorName: string | null;
+  prefixAgent?: boolean;
 };
 
 type SectorOption = { id: string; name: string };
@@ -119,6 +120,22 @@ export default function NumbersClient({
     setNumbers(await (await fetch("/api/numbers")).json());
   }
 
+  // alterna o prefixo "[Nome do atendente]" nas mensagens enviadas por esse numero
+  async function togglePrefix(item: NumberItem) {
+    const next = { prefixAgent: !item.prefixAgent };
+    const res = await fetch(`/api/numbers/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      setError(data?.error ?? "Nao foi possivel alterar o numero.");
+      return;
+    }
+    setNumbers((prev) => prev.map((n) => (n.id === item.id ? { ...n, prefixAgent: next.prefixAgent } : n)));
+  }
+
   return (
     <div className="mt-6">
       {isAdmin && (
@@ -165,6 +182,7 @@ export default function NumbersClient({
               <th className="px-4 py-2">Número</th>
               <th className="px-4 py-2">Telefone</th>
               <th className="px-4 py-2">Setor</th>
+              <th className="px-4 py-2">Identificar atendente</th>
               <th className="px-4 py-2">Status</th>
               <th className="px-4 py-2">Ações</th>
             </tr>
@@ -182,6 +200,21 @@ export default function NumbersClient({
                 <td className="px-4 py-3 font-medium">{item.label}</td>
                 <td className="px-4 py-3 text-slate-600">{item.phone ?? "—"}</td>
                 <td className="px-4 py-3 text-slate-600">{item.sectorName ?? "—"}</td>
+                <td className="px-4 py-3">
+                  {isAdmin ? (
+                    <label className="flex items-center gap-1.5" title="Prefixa as mensagens do painel com o nome do atendente">
+                      <input
+                        type="checkbox"
+                        checked={item.prefixAgent ?? false}
+                        onChange={() => void togglePrefix(item)}
+                        className="h-4 w-4"
+                      />
+                      <span className="text-xs text-slate-600">Identificar</span>
+                    </label>
+                  ) : (
+                    <span className="text-xs text-slate-400">{item.prefixAgent ? "Sim" : "—"}</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${BADGE[item.status] ?? ""}`}>
                     {LABEL[item.status] ?? item.status}

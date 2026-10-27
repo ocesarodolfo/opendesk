@@ -75,8 +75,11 @@ model WhatsAppNumber {
   jid         String?
   // "DISCONNECTED" | "CONNECTING" | "CONNECTED"
   status      String   @default("DISCONNECTED")
-  // Ultimo erro reportado pela conexao (p/ diagnostico no painel)
+  // Último erro reportado pela conexao (p/ diagnostico no painel)
   lastError   String?
+  // logotipo: prefixar "[Nome do atendente]" nas mensagens enviadas pelo painel,
+  // para o contato saber quem do setor esta falando
+  prefixAgent Boolean  @default(false)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
@@ -161,6 +164,8 @@ model Message {
   status         String   @default("SENT")
   // Id da mensagem no lado do WhatsApp (deduplicacao)
   externalId     String?
+  // nao lida pelo painel: INCOMING ainda nao vista por um atendente (badges)
+  viewed         Boolean  @default(false)
   // Em grupos (@g.us): nome exibido do participante que enviou a mensagem
   senderName     String?
   // Em grupos: jid do participante autor (necessario para reagir a mensagem dele)
@@ -168,10 +173,17 @@ model Message {
   // Resposta citando outra mensagem (reply do WhatsApp)
   quotedSnippet  String? // texto/vista rapida da mensagem citada
   quotedSender   String? // telefone de quem enviou a mensagem original
+  quotedSenderName String? // nome resolvida de quem falou a mensagem citada
   // Reacao (emoji) na mensagem — uma por mensagem (ultima vence)
   reaction       String?
   // true = reacao colocada pelo atendente (painel); false/undefined = do contato
   reactionMine   Boolean?
+  // "Apagar para todos": a mensagem foi revogada no WhatsApp
+  deleted        Boolean  @default(false)
+  // mensagem encaminhada (chega com contextInfo.isForwarded no WhatsApp)
+  forwarded      Boolean  @default(false)
+  // agrupa mensagens de midia enviadas juntas (album de imagens)
+  groupKey       String?
   createdAt      DateTime @default(now())
 
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)

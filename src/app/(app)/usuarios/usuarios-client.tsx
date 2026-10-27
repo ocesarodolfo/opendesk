@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { showToast } from "@/components/toast";
+import { IconStar } from "@/components/icons";
 
 type UserItem = {
   id: string;
@@ -94,7 +96,7 @@ export default function UsuariosClient() {
     if (res.ok) await load();
     else {
       const data = await res.json().catch(() => null);
-      alert(data?.error ?? "Acao nao permitida.");
+      showToast(data?.error ?? "Acao nao permitida.", "erro");
     }
   }
 
@@ -182,7 +184,13 @@ export default function UsuariosClient() {
                               : "bg-sky-50 text-sky-700"
                           }`}
                         >
-                          {s.role === "SUPERVISOR" ? `★ ${s.name}` : s.name}
+                          {s.role === "SUPERVISOR" ? (
+                            <>
+                              <IconStar className="mr-1 inline h-3.5 w-3.5 text-amber-400" /> {s.name}
+                            </>
+                          ) : (
+                            s.name
+                          )}
                         </span>
                       ))}
                     </div>
@@ -275,3 +283,4 @@ export default function UsuariosClient() {
     </div>
   );
 }
+

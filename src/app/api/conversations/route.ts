@@ -38,17 +38,37 @@ export async function GET(req: NextRequest) {
       messages: {
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { content: true, mediaType: true, fileName: true },
+        select: {
+          content: true,
+          mediaType: true,
+          fileName: true,
+          direction: true,
+          senderName: true,
+        },
       },
     },
     orderBy: { lastMessageAt: "desc" },
     take: limit,
   });
 
+  // badges de nao lidas: 1 query agrupada (so INCOMING nunca vistas por
+  // atendente, em conversas abertas/pendentes listadas aqui)
+  const unreadGroups = await prisma.message.groupBy({
+    by: ["conversationId"],
+    where: {
+      direction: "INCOMING",
+      viewed: false,
+      conversationId: { in: conversations.map((c) => c.id) },
+      conversation: { status: { not: "CLOSED" } },
+    },
+    _count: { id: true },
+  });
+  const unread = new Map(unreadGroups.map((g) => [g.conversationId, g._count.id]));
+
   return NextResponse.json(
     conversations.map((c) => {
       const dto = toConversationDTO(c);
-      return dto;
+      return { ...dto, unreadCount: unread.get(c.id) ?? 0 };
     })
   );
 }

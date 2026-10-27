@@ -2,12 +2,31 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import {
+  getMute,
+  setMute,
+  getSound,
+  setSound,
+  playSound,
+  SOUND_OPTIONS,
+  type SoundName,
+} from "@/components/notif-sound";
+import {
+  IconSun,
+  IconMoon,
+  IconMonitor,
+  IconBell,
+  IconBellOff,
+  IconUser,
+  IconCheck,
+} from "@/components/icons";
 
 type Theme = "light" | "dark" | "system";
-const THEME_OPTIONS: { value: Theme; label: string; icon: string }[] = [
-  { value: "light", label: "Claro", icon: "☀️" },
-  { value: "dark", label: "Escuro", icon: "🌙" },
-  { value: "system", label: "Sistema", icon: "🖥️" },
+import type { ReactNode } from "react";
+const THEME_OPTIONS: { value: Theme; label: string; Icon: (p: { className?: string }) => ReactNode }[] = [
+  { value: "light", label: "Claro", Icon: IconSun },
+  { value: "dark", label: "Escuro", Icon: IconMoon },
+  { value: "system", label: "Sistema", Icon: IconMonitor },
 ];
 
 function initials(name: string) {
@@ -18,6 +37,8 @@ function initials(name: string) {
 export default function UserMenu({ name, role }: { name: string; role: string }) {
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>("system");
+  const [muted, setMutedLocal] = useState(false);
+  const [sound, _setSound] = useState<SoundName>("classico");
   const boxRef = useRef<HTMLDivElement>(null);
 
   // fecha ao clicar fora ou apertar Esc
@@ -40,6 +61,9 @@ export default function UserMenu({ name, role }: { name: string; role: string })
   // tema: mesma chave de escolha do app (antes no ThemeToggle)
   useEffect(() => {
     setTheme((localStorage.getItem("atende_theme") as Theme) || "system");
+    // notificação: espelha as preferencias do inbox (localStorage)
+    setMutedLocal(getMute());
+    _setSound(getSound());
   }, []);
 
   useEffect(() => {
@@ -117,16 +141,66 @@ export default function UserMenu({ name, role }: { name: string; role: string })
                     : "text-slate-300 hover:bg-slate-700 hover:text-white"
                 }`}
               >
-                <span aria-hidden className="w-5 shrink-0 text-center border-none">{o.icon}</span>
+                <span aria-hidden className="w-5 shrink-0 text-center border-none">
+                  <o.Icon className="inline h-4 w-4" />
+                </span>
                 <span className="min-w-0 flex-1 truncate text-left">{o.label}</span>
                 <span
                   aria-hidden
                   className={`shrink-0 text-xs ${theme === o.value ? "text-indigo-300" : "opacity-0"}`}
                 >
-                  ✓
+                  <IconCheck className="inline h-3.5 w-3.5" />
                 </span>
               </button>
             ))}
+          </div>
+
+          <div className="border-t border-slate-700 px-1 py-2">
+            <p className="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Notificação
+            </p>
+            <button
+              role="menuitem"
+              onClick={() => {
+                const next = !muted;
+                setMutedLocal(next);
+                setMute(next);
+              }}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs ${
+                muted ? "text-slate-300 hover:bg-slate-700" : "text-slate-300 hover:bg-slate-700"
+              }`}
+              title={muted ? "Ativar aviso sonoro" : "Silenciar aviso sonoro"}
+            >
+              <span aria-hidden className="w-5 shrink-0 text-center">
+                {muted ? (
+                  <IconBellOff className="inline h-4 w-4" />
+                ) : (
+                  <IconBell className="inline h-4 w-4" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1 text-left">{muted ? "Silenciado" : "Som ativo"}</span>
+            </button>
+            {!muted ? (
+              <div className="flex flex-wrap gap-1 px-2 pt-1">
+                {SOUND_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    role="menuitem"
+                    onClick={() => {
+                      _setSound(o.value);
+                      setSound(o.value); // persiste + pre-listen
+                    }}
+                    className={`rounded px-2 py-1 text-xs ${
+                      sound === o.value
+                        ? "bg-indigo-600/40 text-white"
+                        : "text-slate-300 hover:bg-slate-700 hover:text-white"
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="border-t border-slate-700 py-1">
@@ -136,7 +210,9 @@ export default function UserMenu({ name, role }: { name: string; role: string })
               onClick={() => setOpen(false)}
               className="flex items-center gap-2 rounded-md mx-1 px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-700 hover:text-white"
             >
-              <span aria-hidden className="w-5 shrink-0 text-center">👤</span>
+              <span aria-hidden className="w-5 shrink-0 text-center">
+                <IconUser className="inline h-4 w-4" />
+              </span>
               <span className="min-w-0 flex-1 truncate">Meu perfil</span>
             </Link>
           </div>

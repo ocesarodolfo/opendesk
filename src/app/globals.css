@@ -68,27 +68,100 @@ html.dark .hover\:bg-slate-50:hover { background-color: #232837; }
 html.dark .chat-scroll::-webkit-scrollbar-thumb {
   background-color: #3a4155;
 }
-/* bolhas do chat recebidas: contraste no escuro */
-html.dark .border-slate-300.bg-slate-200 {
-  background-color: #3a445e; /* bolha Recebidas bem mais clara que o fundo */
-  border-color: #4a5676;
+/* ALERTAS FLUTUANTES (toasts) */
+.toast-info {
+  @apply border-sky-200 bg-sky-50 text-sky-800;
 }
-/* bolha Enviadas: esmeralda escuro com borda nitida (texto claro vem do override global) */
-html.dark .border-emerald-300.bg-emerald-200 {
-  background-color: #155e4c;
+.toast-sucesso {
+  @apply border-emerald-200 bg-emerald-50 text-emerald-800;
+}
+.toast-erro {
+  @apply border-rose-200 bg-rose-50 text-rose-700;
+}
+html.dark .toast-info {
+  background-color: #152a3d;
+  border-color: #2b5d84;
+  color: #bfe3ff;
+}
+html.dark .toast-sucesso {
+  background-color: #0c2f23;
   border-color: #1f7a61;
+  color: #b9f0da;
 }
-/* bloco de citação dentro das bolhas: fundo próprio no escuro */
-html.dark .border-slate-400.bg-slate-100 {
+html.dark .toast-erro {
+  background-color: #33131b;
+  border-color: #a33b4e;
+  color: #ffc9d3;
+}
+/* bolhas do chat: no escuro, classes semanticas (chat-bubble-*) dominam —
+   os combos de cor utilitaria variam e nao podem mais ser o alvo */
+html.dark .chat-bubble-in {
+  background-color: #202c33; /* recebidas: cinza-azulado do WhatsApp Web */
+  border-color: #313d45;
+}
+html.dark .chat-bubble-out {
+  background-color: #005c4b; /* enviadas: verde oficial do WhatsApp Web dark */
+  border-color: #0b8a6d;
+}
+/* citacao dentro de cada bolha: tonem visivel nos dois fundos */
+html.dark .chat-bubble-in .chat-quote {
+  background-color: #182b33;
+}
+html.dark .chat-bubble-out .chat-quote {
+  background-color: #004d40;
+}
+/* bloco de citacao dentro das bolhas */
+html.dark .chat-quote {
   background-color: #1e2635;
-  border-color: #566379;
 }
-/* chip de reação / strip de emojis */
-html.dark .border-slate-200.bg-white {
+/* player de audio dentro da bolha */
+html.dark .chat-audio-player {
+  background-color: rgb(255 255 255 / 8%);
+}
+html.dark .chat-audio-player .chat-audio-track {
+  background-color: #45576b;
+}
+html.dark .chat-audio-speed {
+  background-color: #1d2733;
+}
+/* texto da transcricao do audio */
+html.dark .chat-audio-transcript {
+  color: #e9edef;
+}
+/* chip de reacao, seletor acima da bolha e bancada de emojis */
+html.dark .chat-react-chip,
+html.dark .chat-react-strip,
+html.dark .chat-react-extended {
   border-color: #3a4155;
   background-color: #232837;
 }
+/* menu de acoes da mensagem (RESPONDER/APAGAR): dark-próprio */
+html.dark .chat-actions-menu {
+  background-color: #1e2a33;
+  border-color: #313d45;
+}
+html.dark .chat-actions-item {
+  color: #d3dbe2;
+}
+html.dark .chat-actions-item:hover {
+  background-color: #2a3946;
+}
+html.dark .chat-actions-item:hover .chat-actions-danger-text {
+  color: #ff9aa8;
+}
+html.dark .chat-actions-item-danger:hover {
+  background-color: #3a1c26;
+}
+/* selecao de lote mantem visivel */
+html.dark .bg-violet-50 {
+  background-color: #241b3a;
+}
+/* lista de conversas: conversa aberta (azul) e hover por cima dela aprofundam */
+html.dark .bg-sky-50 {
+  background-color: #152238;
+}
+html.dark .bg-sky-100\/70 {
+  background-color: #1c2c47;
+}
 /* menu lateral ja e escuro: mantem neutro */
 
-/* painel do editor de vinculos / modo lote mantem contraste */
-html.dark .bg-sky-50 { background-color: #152238; }

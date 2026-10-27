@@ -12,6 +12,8 @@ export type ConversationDTO = {
   contactId: string;
   contactIsGroup: boolean;
   numberLabel: string;
+  // numero tem "identificar atendente" ativo (prefixo nas mensagens enviadas)
+  prefixAgent?: boolean;
   sectorId: string | null;
   sectorName: string | null;
   assignedUserId: string | null;
@@ -26,6 +28,9 @@ type LastMsgLite = {
   content: string;
   mediaType: string | null;
   fileName: string | null;
+  // quem mandou (p/ o prefixo "Você:"/"Nome:" como o WhatsApp usa)
+  direction?: string;
+  senderName?: string | null;
 };
 
 type ConversationFull = Conversation & {
@@ -42,16 +47,25 @@ type ConversationFull = Conversation & {
  * Preview da última mensagem p/ a lista de conversas: midia sem legenda
  * nao pode virar "(sem texto)" — descreve o tipo como o WhatsApp faz.
  */
-function lastMessagePreview(m: LastMsgLite | undefined): string {
+function lastMessagePreview(
+  m: LastMsgLite | undefined,
+  group: boolean
+): string {
   if (!m) return "";
-  if (m.content) return m.content;
-  const t = m.mediaType ?? "";
-  if (t === "image/webp" || t === "video/webp") return "📌 Figurinha";
-  if (t.startsWith("image/")) return "📷 Foto";
-  if (t.startsWith("video/")) return "🎥 Vídeo";
-  if (t.startsWith("audio/")) return "🎵 Áudio";
-  if (t) return `📄 ${m.fileName || "Documento"}`;
-  return "";
+  const body = m.content || (() => {
+    const t = m.mediaType ?? "";
+    if (t === "image/webp" || t === "video/webp") return "📌 Figurinha";
+    if (t.startsWith("image/")) return "📷 Foto";
+    if (t.startsWith("video/")) return "🎥 Vídeo";
+    if (t.startsWith("audio/")) return "🎵 Áudio";
+    if (t) return `📄 ${m.fileName || "Documento"}`;
+    return "";
+  })();
+  // autor da última mensagem, como o WhatsApp: "Você:" nas suas;
+  // em grupo, o nome do participante; 1:1 recebida vai sem prefixo
+  if (m.direction === "OUTGOING") return `Você: ${body}`;
+  if (group && m.direction === "INCOMING") return `${m.senderName ?? "Contato"}: ${body}`;
+  return body;
 }
 
 export function toConversationDTO(c: ConversationFull): ConversationDTO {
@@ -59,12 +73,13 @@ export function toConversationDTO(c: ConversationFull): ConversationDTO {
     id: c.id,
     status: c.status,
     lastMessageAt: c.lastMessageAt.toISOString(),
-    lastMessage: lastMessagePreview(c.messages?.[0]),
+    lastMessage: lastMessagePreview(c.messages?.[0], c.contact.isGroup),
     contactName: c.contact.name ?? c.contact.pushName ?? null,
     contactPhone: c.contact.phone,
     contactId: c.contact.id,
     contactIsGroup: c.contact.isGroup,
     numberLabel: c.whatsappNumber.label,
+    prefixAgent: c.whatsappNumber.prefixAgent,
     sectorId: c.sectorId,
     sectorName: c.sector?.name ?? null,
     assignedUserId: c.assignedUserId,

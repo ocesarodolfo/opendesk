@@ -1,6 +1,7 @@
 import { requireSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { IconDownload } from "@/components/icons";
 
 export const dynamic = "force-dynamic";
 
@@ -162,10 +163,10 @@ export default async function RelatoriosPage({
         ))}
         <a
           href={`/api/relatorios/export?range=${range}`}
-          className="ml-auto rounded-md border border-emerald-600 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+          className="ml-auto flex items-center gap-1.5 rounded-md border border-emerald-600 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
           title="Baixar o relatorio deste periodo em CSV (abre no Excel)"
         >
-          ⬇ Exportar CSV
+          <IconDownload className="h-4 w-4" /> Exportar CSV
         </a>
       </div>
 

@@ -1,6 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MessageBubble, MessageList } from "./components/MessageBubble";
+import { ToastHost, showToast } from "@/components/toast";
+import { getMute, getSound, playSound, SOUND_EVENT, type SoundName } from "@/components/notif-sound";
+import {
+  IconCheckboxOn,
+  IconCheckboxOff,
+  IconUsers,
+  IconPencil,
+  IconPaperclip,
+  IconBolt,
+  IconDownload,
+  IconX,
+} from "@/components/icons";
 
 type Status = "PENDING" | "OPEN" | "CLOSED";
 type StatusFilter = Status | "ALL";
@@ -15,30 +28,20 @@ type ConversationItem = {
   contactId: string;
   contactIsGroup: boolean;
   numberLabel: string;
+  prefixAgent?: boolean;
   sectorId: string | null;
   sectorName: string | null;
   assignedUserId: string | null;
   assignedUserName: string | null;
+  /** mensagens recebidas ainda nao vistas por atendente (badge "nao lidas") */
+  unreadCount?: number;
   contactTags?: TagItem[];
 };
 
 type TagItem = { id: string; name: string; color: string };
 
-type MessageItem = {
-  id: string;
-  direction: "INCOMING" | "OUTGOING";
-  content: string;
-  createdAt: string;
-  status: string;
-  mediaUrl?: string | null;
-  mediaType?: string | null;
-  fileName?: string | null;
-  senderName?: string | null;
-  quotedSnippet?: string | null;
-  quotedSender?: string | null;
-  reaction?: string | null;
-  reactionMine?: boolean | null;
-};
+// tipo da bolha e componente visuais vivem em ./components/MessageBubble
+import type { MessageItem } from "./components/MessageBubble";
 
 type UserOption = { id: string; name: string };
 type SectorOption = { id: string; name: string; active: boolean };
@@ -55,9 +58,6 @@ const STATUS_META: Record<Status, { label: string; chip: string }> = {
   OPEN: { label: "Aberto", chip: "bg-emerald-100 text-emerald-700" },
   CLOSED: { label: "Encerrado", chip: "bg-slate-100 text-slate-600" },
 };
-
-// emojis rapidos para reagir as mensagens na bolha
-const QUICK_EMOJIS = ["👍", "❤️", "😂", "🙏"];
 
 // Exibe o numero de telefone BR como +55 (DDD) 00000-0000 (quando reconhecido)
 function formatPhone(d: string): string {
@@ -91,6 +91,13 @@ export default function InboxClient() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [selected, setSelected] = useState<ConversationDetail | null>(null);
   const [draft, setDraft] = useState("");
+  // carga em progresso para os skeletons (lista e detalhe)
+  const [listLoading, setListLoading] = useState(true);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  // modo resposta: barra acima do composer com a mensagem citada (pragmatico —
+  // Baileys 6.x usa a stanza da mensagem original para cotar no WA; guardamos
+  // a citacao no lado do painel)
+  const [replyTo, setReplyTo] = useState<{ name: string; snippet: string } | null>(null);
   const [sending, setSending] = useState(false);
   const [usersList, setUsersList] = useState<UserOption[]>([]);
   const [me, setMe] = useState<Me | null>(null);
@@ -112,18 +119,26 @@ export default function InboxClient() {
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const selectedIdRef = useRef<string | null>(null);
 
   // mantem o id da conversa aberta acessivel no listener SSE
   // (evita reconectar o EventSource a cada selecao)
+  const selectedIdRef = useRef<string | null>(null);
+  // "ja carregou a lista uma vez (com sucesso)"? depois disso, fim do skeleton
+  const firstLoadedRef = useRef(false);
   useEffect(() => {
     selectedIdRef.current = selected?.conversation.id ?? null;
   }, [selected]);
 
   useEffect(() => {
-    const stored = localStorage.getItem("atende_mute");
-    if (stored === "1") setMuted(true);
-    setSoundName(localStorage.getItem("atende_sound") ?? "classico");
+    setMuted(getMute());
+    setSoundName(getSound());
+    // sincroniza com o menu do perfil (mesma origem: localStorage + evento)
+    const sync = () => {
+      setMuted(getMute());
+      setSoundName(getSound());
+    };
+    window.addEventListener(SOUND_EVENT, sync);
+    return () => window.removeEventListener(SOUND_EVENT, sync);
     void fetch("/api/users")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: UserOption[]) => setUsersList(list));
@@ -141,26 +156,68 @@ export default function InboxClient() {
       .then((list: TagItem[]) => setTagOptions(list));
   }, []);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (opts?: { cache?: boolean }) => {
     const params = new URLSearchParams();
     if (statusFilter !== "ALL") params.set("status", statusFilter);
     if (query.trim()) params.set("q", query.trim());
     const qs = params.toString();
+    const cacheKey = `atende_conv_cache:${statusFilter}${query.trim() ? `|${query.trim()}` : ""}`;
+    setListLoading(true);
+    // cache local: renderiza a lista na hora (stale-while-revalidate)
+    if (opts?.cache) {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) setConversations(JSON.parse(cached) as ConversationItem[]);
+      } catch {
+        /* cache invalido/indisponivel: ignora */
+      }
+    }
     const res = await fetch(`/api/conversations${qs ? `?${qs}` : ""}`);
-    if (res.ok) setConversations(await res.json());
+    if (res.ok) {
+      const data = (await res.json()) as ConversationItem[];
+      setConversations(data);
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(data));
+      } catch {
+        /* sem espaco: ignora */
+      }
+    }
+    // verdeiro "ja carregou uma vez": depois da 1a carga com sucesso, nunca
+    // mais skeleton (o vidro nunca fica vazio — mostra o anterior e revalida)
+    if (res.ok) firstLoadedRef.current = true;
+    setListLoading(false);
   }, [statusFilter, query]);
 
-  const loadDetail = useCallback(async (id: string) => {
+  const loadDetail = useCallback(async (id: string, opts?: { cache?: boolean }) => {
     setRepliesOpen(false);
     setEditingName(false);
+    setReplyTo(null);
+    // cache local: mensagens aparecem instantaneamente ao abrir a conversa
+    if (opts?.cache) {
+      try {
+        const cached = localStorage.getItem(`atende_detail_cache:${id}`);
+        if (cached) setSelected(JSON.parse(cached) as ConversationDetail);
+      } catch {
+        /* cache invalido: ignora */
+      }
+    }
     const res = await fetch(`/api/conversations/${id}`);
-    if (res.ok) setSelected(await res.json());
-    else setSelected(null);
+    if (res.ok) {
+      const data = (await res.json()) as ConversationDetail;
+      setSelected(data);
+      try {
+        localStorage.setItem(`atende_detail_cache:${id}`, JSON.stringify(data));
+      } catch {
+        /* sem espaco: ignora */
+      }
+    } else if (!opts?.cache) {
+      setSelected(null); // sem cache: mostra o vazio (pane detalhe vira skeleton)
+    }
   }, []);
 
-  // Carrega lista ao filtrar/buscar
+  // Carrega lista ao filtrar/buscar (com cache local: lista instantanea)
   useEffect(() => {
-    void loadList();
+    void loadList({ cache: true });
   }, [loadList]);
 
   // Tempo real via SSE
@@ -179,6 +236,10 @@ export default function InboxClient() {
         ) {
           if (evt.conversationId === selectedIdRef.current) {
             void loadDetail(evt.conversationId);
+            // conversa aberta em foco = mensagem nova ja lida pelo atendente
+            void fetch(`/api/conversations/${evt.conversationId}/read`, { method: "POST" }).catch(
+              () => null
+            );
           }
           // aviso sonoro: nova mensagem recebida em conversa ainda nao assumida
           if (
@@ -191,14 +252,28 @@ export default function InboxClient() {
           void loadList();
         }
         if (evt.type === "message:update" && typeof evt.conversationId === "string") {
-          // reacao: atualiza a bolha em tela sem recarregar tudo
-          const upd = evt.message as { id: string; reaction: string | null; reactionMine: boolean | null };
+          // reacao/status: atualiza a bolha em tela sem recarregar tudo
+          const upd = evt.message as {
+            id: string;
+            reaction?: string | null;
+            reactionMine?: boolean | null;
+            status?: string;
+            deleted?: boolean;
+          };
           setSelected((prev) =>
             prev && prev.conversation.id === evt.conversationId
               ? {
                   ...prev,
                   messages: prev.messages.map((m) =>
-                    m.id === upd.id ? { ...m, reaction: upd.reaction, reactionMine: upd.reactionMine } : m
+                    m.id === upd.id
+                      ? {
+                          ...m,
+                          reaction: upd.reaction !== undefined ? upd.reaction : m.reaction,
+                          reactionMine: upd.reactionMine !== undefined ? upd.reactionMine : m.reactionMine,
+                          status: upd.status ?? m.status,
+                          deleted: upd.deleted ?? m.deleted,
+                        }
+                      : m
                   ),
                 }
               : prev
@@ -214,31 +289,134 @@ export default function InboxClient() {
     return () => source.close();
   }, [loadList, loadDetail, muted, soundName]);
 
+  // rolar ao fim: instantaneo. "Colar no rodape": ao abrir qualquer conversa
+  // o usuario vai direto para a mensagem mais recente; mensagens novas só
+  // arrastam a view se ele ja estava no rodape (como o WhatsApp faz)
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickBottomRef = useRef(true);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }, []);
+
+  // troca de conversa: sempre vai ao fim, sem animacao
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    stickBottomRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+  }, [selected?.conversation.id]);
+
+  // mensagem nova: so rola se o usuario ja estava no rodape
+  useEffect(() => {
+    if (!selected) return;
+    if (stickBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+    }
   }, [selected?.messages.length]);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = draft.trim();
     if (!text || !selected) return;
+    const convId = selected.conversation.id;
+    const conv = selected.conversation;
+    // envio otimista: bolha aparece na hora (com prefixo do atendente, se ativo),
+    // com relogio de "enviando" ate a confirmacao do servidor
+    // prefixo do atendente em LINHA PROPRIA: "[Nome]\n resto da mensagem"
+    const prefix = conv.prefixAgent && me?.name ? `[${me.name}]\n` : "";
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const temp: MessageItem = {
+      id: tempId,
+      direction: "OUTGOING",
+      content: `${prefix}${text}`,
+      createdAt: new Date().toISOString(),
+      status: "SENT",
+      pending: true,
+      quotedSnippet: replyTo?.snippet ?? undefined,
+      quotedSenderName: replyTo?.name ?? undefined,
+    };
+    setSelected((prev) =>
+      prev && prev.conversation.id === convId
+        ? { ...prev, messages: [...prev.messages, temp] }
+        : prev
+    );
+    setDraft("");
+    const reply = replyTo;
+    setReplyTo(null);
     setSending(true);
     try {
-      const res = await fetch(`/api/conversations/${selected.conversation.id}/messages`, {
+      const res = await fetch(`/api/conversations/${convId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({
+          content: text,
+          replyName: reply?.name ?? null,
+          replySnippet: reply?.snippet ?? null,
+        }),
       });
       if (res.ok) {
-        setDraft("");
-        await loadDetail(selected.conversation.id);
+        await loadDetail(convId); // substitui a bolha temporaria pela persistida
         await loadList();
       } else {
+        // falha: remove a bolha otimista
+        setSelected((prev) =>
+          prev && prev.conversation.id === convId
+            ? { ...prev, messages: prev.messages.filter((m) => m.id !== tempId) }
+            : prev
+        );
         const data = await res.json().catch(() => null);
-        alert(data?.error ?? "Nao foi possivel enviar a mensagem.");
+        showToast(data?.error ?? "Nao foi possivel enviar a mensagem.", "erro");
       }
+    } catch {
+      setSelected((prev) =>
+        prev && prev.conversation.id === convId
+          ? { ...prev, messages: prev.messages.filter((m) => m.id !== tempId) }
+          : prev
+      );
     } finally {
       setSending(false);
+    }
+  }
+
+  // abre conversa: cache local primeiro (insta) + skeleton enquanto revalida
+  function openConversation(item: ConversationItem) {
+    setSelected(null);
+    setOpeningId(item.id);
+    // abriu = leu no painel (badges zeram, como no WhatsApp)
+    void fetch(`/api/conversations/${item.id}/read`, { method: "POST" })
+      .then((r) => (r.ok ? loadList() : null))
+      .catch(() => null);
+    void loadDetail(item.id, { cache: true }).then(() => setOpeningId(null));
+  }
+
+  // abre o modo resposta no composer (menu de acoes das bolhas)
+  function startReply(message: MessageItem) {
+    const name =
+      message.direction === "OUTGOING" ? "Você" : message.senderName ?? "Contato";
+    setReplyTo({
+      name,
+      snippet:
+        (message.content || message.fileName || "Mídia").slice(0, 120),
+    });
+  }
+
+  // "Apagar para todos": revoke no WhatsApp + marca no banco
+  async function deleteForAll(message: MessageItem) {
+    if (!selected) return;
+    if (!confirm("Apagar esta mensagem para todos no WhatsApp?")) return;
+    const convId = selected.conversation.id;
+    const res = await fetch(
+      `/api/conversations/${convId}/messages?messageId=${encodeURIComponent(message.id)}`,
+      { method: "DELETE" }
+    );
+    if (res.ok) {
+      showToast("Mensagem apagada para todos.", "sucesso");
+      await loadDetail(convId);
+      await loadList();
+    } else {
+      const data = await res.json().catch(() => null);
+      showToast(data?.error ?? "Nao foi possivel apagar a mensagem.", "erro");
     }
   }
 
@@ -268,7 +446,7 @@ export default function InboxClient() {
       await loadDetail(selected.conversation.id);
       await loadList();
     } else {
-      alert("Nao foi possivel transferir a conversa.");
+      showToast("Nao foi possivel transferir a conversa.", "erro");
     }
   }
 
@@ -314,7 +492,7 @@ export default function InboxClient() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        alert(data?.error ?? "Nao foi possivel atribuir em lote.");
+        showToast(data?.error ?? "Nao foi possivel atribuir em lote.", "erro");
         return;
       }
       setBulkSelected(new Set());
@@ -333,7 +511,7 @@ export default function InboxClient() {
       body: JSON.stringify({ name }),
     });
     if (!res.ok) {
-      alert("Nao foi possivel salvar o nome do contato.");
+      showToast("Nao foi possivel salvar o nome do contato.", "erro");
       return;
     }
     setEditingName(false);
@@ -350,7 +528,7 @@ export default function InboxClient() {
       body: JSON.stringify({ tagIds: tags.map((t) => t.id) }),
     });
     if (!res.ok) {
-      alert("Nao foi possivel salvar as etiquetas do contato.");
+      showToast("Nao foi possivel salvar as etiquetas do contato.", "erro");
       return;
     }
     await loadDetail(selected.conversation.id);
@@ -363,7 +541,7 @@ export default function InboxClient() {
     let tag = tagOptions.find((t) => t.name.toLowerCase() === name.toLowerCase());
     if (!tag) {
       if (me?.role !== "ADMIN") {
-        alert("Etiqueta inexistente. Peça a um administrador para criá-la.");
+        showToast("Etiqueta inexistente. Peça a um administrador para criá-la.", "erro");
         return;
       }
       const res = await fetch("/api/tags", {
@@ -373,7 +551,7 @@ export default function InboxClient() {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.id) {
-        alert(data?.error ?? "Nao foi possivel criar a etiqueta.");
+        showToast(data?.error ?? "Nao foi possivel criar a etiqueta.", "erro");
         return;
       }
       tag = data as TagItem;
@@ -402,7 +580,7 @@ export default function InboxClient() {
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      alert(data?.error ?? "Nao foi possivel reagir.");
+      showToast(data?.error ?? "Nao foi possivel reagir.", "erro");
       return;
     }
     const upd = data as { id: string; reaction: string | null; reactionMine: boolean | null };
@@ -433,7 +611,7 @@ export default function InboxClient() {
         await loadList();
       } else {
         const data = await res.json().catch(() => null);
-        alert(data?.error ?? "Nao foi possivel mover a conversa de setor.");
+        showToast(data?.error ?? "Nao foi possivel mover a conversa de setor.", "erro");
       }
     } finally {
       setMovingSector(false);
@@ -442,6 +620,12 @@ export default function InboxClient() {
 
   async function uploadMedia(file: File) {
     if (!selected) return;
+    // varios arquivos de imagem selecionados de uma vez => album em uma unica
+    // interacao (chave unica agrupa as imagens numa bolha so no painel)
+    if (fileInputRef.current?.files && fileInputRef.current.files.length > 1) {
+      await uploadAlbum(Array.from(fileInputRef.current.files));
+      return;
+    }
     setUploading(true);
     try {
       const form = new FormData();
@@ -457,8 +641,65 @@ export default function InboxClient() {
         await loadList();
       } else {
         const data = await res.json().catch(() => null);
-        alert(data?.error ?? "Nao foi possivel enviar o arquivo.");
+        showToast(data?.error ?? "Nao foi possivel enviar o arquivo.", "erro");
       }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  // album: envia N imagens em sequencia com a mesma groupKey; o painel
+  // reagrupa e mostra como uma unica bolha ("uma mensagem" na interacao)
+  async function uploadAlbum(files: File[]) {
+    if (!selected || files.length === 0) return;
+    const convId = selected.conversation.id;
+    // album: a legenda sai SEM prefixo aqui — o servidor (rota de midia)
+    // aplica sozinho, evitando prefixo duplo; e em linha propria
+    const caption = draft.trim();
+    const groupKey = crypto.randomUUID().slice(0, 8);
+    setUploading(true);
+    setDraft("");
+    let failed = false;
+    try {
+      for (const file of files) {
+        setSelected((prev) =>
+          prev && prev.conversation.id === convId
+            ? {
+                ...prev,
+                messages: [
+                  ...prev.messages,
+                  {
+                    id: `tmp-${groupKey}-${files.indexOf(file)}`,
+                    direction: "OUTGOING" as const,
+                    content: "",
+                    createdAt: new Date().toISOString(),
+                    status: "SENT",
+                    mediaType: file.type,
+                    fileName: file.name,
+                    mediaUrl: null,
+                    groupKey,
+                  },
+                ],
+              }
+            : prev
+        );
+        const form = new FormData();
+        form.set("file", file);
+        form.set("caption", caption);
+        form.set("groupKey", groupKey);
+        const res = await fetch(`/api/conversations/${convId}/media`, { method: "POST", body: form });
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          showToast(data?.error ?? `Falha ao enviar a imagem ${file.name}.`, "erro");
+          failed = true;
+          break;
+        }
+      }
+      // recarrega apos a sequencia (substitui as bolhas otimistas pelas firmes)
+      await loadDetail(convId);
+      await loadList();
+      if (!failed) showToast(`${files.length} imagens enviadas.`, "sucesso");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -469,7 +710,7 @@ export default function InboxClient() {
   const canSend = c && c.status !== "CLOSED";
 
   return (
-    <div className="grid h-[calc(100vh-4rem)] grid-cols-[360px_1fr] gap-4">
+    <div className="grid h-[calc(100vh-4rem)] min-w-0 grid-cols-[360px_minmax(0,1fr)] gap-4 overflow-hidden">
       {/* ---- lista de conversas ---- */}
       <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-100 p-3">
@@ -495,34 +736,6 @@ export default function InboxClient() {
             className="mt-2 w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-sky-500 focus:outline-none"
           />
           <div className="mt-2 flex gap-1">
-            <button
-              onClick={() => {
-                const next = !muted;
-                setMuted(next);
-                localStorage.setItem("atende_mute", next ? "1" : "0");
-              }}
-              title={muted ? "Ativar aviso sonoro" : "Silenciar aviso sonoro"}
-              className="flex-1 rounded-md border border-slate-200 px-1 py-1 text-xs text-slate-500 hover:bg-slate-50"
-            >
-              {muted ? "🔇" : "🔔"}
-            </button>
-            <select
-              value={soundName}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSoundName(v);
-                localStorage.setItem("atende_sound", v);
-                playSound(v); // pre-listen ao trocar
-              }}
-              title="Som da notificação de nova mensagem"
-              className="rounded-md border border-slate-200 bg-white px-1 py-1 text-xs text-slate-500 focus:outline-none"
-            >
-              {SOUND_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
             {canBulk && (
               <button
                 onClick={() => {
@@ -536,7 +749,7 @@ export default function InboxClient() {
                     : "border-slate-200 px-3 py-1 text-slate-500 hover:bg-slate-50"
                 }`}
               >
-                ☑ Lote
+                <IconCheckboxOn className="inline h-4 w-4 align-[-2px] text-violet-600" /> Lote
               </button>
             )}
           </div>
@@ -569,23 +782,53 @@ export default function InboxClient() {
           )}
         </div>
         <div className="flex-1 overflow-y-auto chat-scroll">
-          {conversations.length === 0 && (
+          {listLoading && conversations.length === 0 && !firstLoadedRef.current
+            ? // skeleton: SO na primeira carga da sessao (sem cache/fetch ainda);
+              // depois disso nunca sobra vazio nem skeleton
+              Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="animate-pulse border-b border-slate-100 px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="h-3.5 w-36 rounded bg-slate-200" />
+                    <div className="h-4 w-16 rounded-full bg-slate-200" />
+                  </div>
+                  <div className="mt-2 h-2.5 w-48 rounded bg-slate-200" />
+                  <div className="mt-2 h-2.5 w-40 rounded bg-slate-100" />
+                </div>
+              ))
+            : null}
+          {!listLoading && conversations.length === 0 && (
             <p className="p-6 text-center text-sm text-slate-400">Nenhuma conversa nessa lista.</p>
           )}
           {conversations.map((item) => (
             <button
               key={item.id}
               onClick={() =>
-                bulkMode ? toggleBulk(item.id) : void loadDetail(item.id)
+                bulkMode ? toggleBulk(item.id) : void openConversation(item)
               }
-              className={`block w-full border-b border-slate-100 px-4 py-3 text-left hover:bg-slate-50 ${
-                selected?.conversation.id === item.id ? "bg-sky-50" : ""
+              className={`block w-full border-b border-slate-100 px-4 py-3 text-left transition-colors ${
+                selected?.conversation.id === item.id
+                  ? "bg-sky-50 hover:bg-sky-100/70" // aberta: realce azul permanente, hover aprofunda
+                  : item.status === "CLOSED"
+                    ? "hover:bg-slate-50 opacity-70" // encerrada: esmaecida no repouso
+                    : "hover:bg-slate-50"
               } ${bulkMode && bulkSelected.has(item.id) ? "bg-violet-50" : ""}`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium text-slate-900">
-                  {bulkMode ? (bulkSelected.has(item.id) ? "☑ " : "☐ ") : ""}
-                  {item.contactIsGroup ? "👥 " : ""}
+                <span
+                  className={`truncate text-sm text-slate-900 ${
+                    (item.unreadCount ?? 0) > 0 ? "font-bold" : "font-medium"
+                  }`}
+                >
+                  {bulkMode ? (
+                    bulkSelected.has(item.id) ? (
+                      <IconCheckboxOn className="mr-1 inline h-4 w-4 align-[-3px]" />
+                    ) : (
+                      <IconCheckboxOff className="mr-1 inline h-4 w-4 align-[-3px] text-slate-400" />
+                    )
+                  ) : null}
+                  {item.contactIsGroup ? (
+                    <IconUsers className="mr-1 inline h-4 w-4 align-[-3px]" />
+                  ) : null}
                   {item.contactName || item.contactPhone}
                 </span>
                 <span
@@ -599,28 +842,60 @@ export default function InboxClient() {
               <p className="mt-0.5 truncate text-xs text-slate-500">
                 {item.numberLabel} · {item.contactIsGroup ? "grupo" : formatPhone(item.contactPhone)}
               </p>
-              <p className="mt-1 truncate text-xs text-slate-600">
+              <p
+                className={`mt-1 truncate text-xs ${
+                  (item.unreadCount ?? 0) > 0 ? "font-semibold text-slate-800" : "text-slate-600"
+                }`}
+              >
                 {item.status !== "CLOSED" ? (item.lastMessage || "(sem texto)") : ""}
               </p>
-              <p className="mt-1 text-xs text-slate-400">
-                {new Date(item.lastMessageAt).toLocaleString("pt-BR")}
-              </p>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <p className="truncate text-xs text-slate-400">
+                  {new Date(item.lastMessageAt).toLocaleString("pt-BR")}
+                </p>
+                {/* nao lidas: bolinha/chip verde como no WhatsApp */}
+                {(item.unreadCount ?? 0) > 0 ? (
+                  <span
+                    className="inline-flex min-w-[18px] shrink-0 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold leading-4 text-white"
+                    title={`${item.unreadCount} mensagem(ns) nao lida(s)`}
+                  >
+                    {(item.unreadCount ?? 0) > 99 ? "99+" : item.unreadCount}
+                  </span>
+                ) : null}
+              </div>
             </button>
           ))}
         </div>
       </div>
 
       {/* ---- conversa aberta ---- */}
-      <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
         {!selected ? (
-          <div className="flex flex-1 items-center justify-center text-slate-400">
-            Selecione uma conversa à esquerda
-          </div>
+          openingId ? (
+            /* skeleton do detalhe: cabecalho + bolhas pulsando na corredor */
+            <div className="flex flex-1 flex-col p-5">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="h-8 w-8 rounded-full bg-slate-200" />
+                <div className="h-3.5 w-40 rounded bg-slate-200" />
+              </div>
+              <div className="flex-1 animate-pulse space-y-3">
+                <div className="ml-auto h-10 w-2/5 rounded-xl bg-slate-200" />
+                <div className="mr-auto h-10 w-1/3 rounded-xl bg-slate-100" />
+                <div className="ml-auto h-14 w-1/2 rounded-xl bg-slate-200" />
+                <div className="mr-auto h-10 w-2/5 rounded-xl bg-slate-100" />
+                <div className="ml-auto h-10 w-1/4 rounded-xl bg-slate-200" />
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-slate-400">
+              Selecione uma conversa à esquerda
+            </div>
+          )
         ) : (
           <>
-            {/* inserir fonte necessarios? */}
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-              <div>
+            {/* cabecalho: esquerda flexivel (nome truncate), direita compacta */}
+            <div className="flex min-w-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-3">
+              <div className="min-w-0">
                 {editingName ? (
                   <div className="flex items-center gap-1">
                     <input
@@ -645,13 +920,13 @@ export default function InboxClient() {
                       onClick={() => setEditingName(false)}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600"
                     >
-                      ✕
+                      <IconX className="inline h-3.5 w-3.5" />
                     </button>
                   </div>
                 ) : (
-                  <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                    {c?.contactIsGroup ? "👥 " : ""}
-                    {c?.contactName || c?.contactPhone}
+                  <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-slate-900">
+                    {c?.contactIsGroup ? <IconUsers className="h-4 w-4 shrink-0" /> : null}
+                    <span className="truncate">{c?.contactName || c?.contactPhone}</span>
                     {c?.contactIsGroup ? (
                       <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
                         Grupo
@@ -665,11 +940,11 @@ export default function InboxClient() {
                       title="Renomear contato"
                       className="text-xs text-slate-400 transition-colors hover:text-sky-600"
                     >
-                      ✏️
+                      <IconPencil className="inline h-3.5 w-3.5" />
                     </button>
                   </p>
                 )}
-                <p className="text-xs text-slate-500">
+                <p className="truncate text-xs text-slate-500">
                   {c?.contactIsGroup ? "grupo" : formatPhone(c?.contactPhone ?? "")} · {c?.numberLabel}
                   {c?.sectorName ? ` · ${c.sectorName}` : ""}
                   {c?.assignedUserName ? ` · Atendente: ${c.assignedUserName}` : ""}
@@ -690,7 +965,7 @@ export default function InboxClient() {
                         title="Remover etiqueta"
                         className="opacity-60 transition-opacity hover:opacity-100"
                       >
-                        ✕
+                        <IconX className="inline h-3 w-3" />
                       </button>
                     </span>
                   ))}
@@ -729,7 +1004,7 @@ export default function InboxClient() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {me?.role === "ADMIN" && (
                   <select
                     value={c?.sectorId ?? ""}
@@ -779,17 +1054,43 @@ export default function InboxClient() {
               </div>
             </div>
 
-            <div className="flex-1 space-y-2 overflow-y-auto bg-slate-50 p-5 chat-scroll">
-              {selected.messages.map((m) => (
-                <MessageBubble key={m.id} message={m} onReact={reactToMessage} onOpenImage={setViewerSrc} />
-              ))}
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto bg-slate-50 p-5 chat-scroll"
+            >
+              <MessageList
+                messages={selected.messages}
+                onReact={reactToMessage}
+                onOpenImage={setViewerSrc}
+                onDelete={deleteForAll}
+                onReply={startReply}
+              />
               <div ref={bottomRef} />
             </div>
 
             <form onSubmit={send} className="relative flex gap-2 border-t border-slate-100 p-3">
+              {/* barra de resposta: citacao acima do input (cancela com x) */}
+              {replyTo && canSend ? (
+                <div className="chat-quote absolute -top-10 right-3 left-3 z-10 flex items-center justify-between rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 shadow-sm">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-sky-700">↩ {replyTo.name}</p>
+                    <p className="truncate text-xs text-slate-600">{replyTo.snippet}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(null)}
+                    title="Cancelar resposta"
+                    className="ml-2 shrink-0 text-sm text-slate-500 hover:text-rose-600"
+                  >
+                    <IconX className="inline h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : null}
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 className="hidden"
                 accept="image/*,video/*,audio/*,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
                 onChange={(e) => {
@@ -800,11 +1101,11 @@ export default function InboxClient() {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={!canSend || uploading}
+                disabled={!canSend}
                 title="Anexar imagem, documento, áudio ou vídeo (até 25 MB)"
                 className="rounded-md border border-slate-300 px-3 text-base text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               >
-                {uploading ? "⏳" : "📎"}
+                <IconPaperclip className="inline h-4 w-4" />
               </button>
               <button
                 type="button"
@@ -812,7 +1113,7 @@ export default function InboxClient() {
                 title="Respostas rápidas"
                 className="rounded-md border border-slate-300 px-3 text-base text-slate-600 hover:bg-slate-50"
               >
-                ⚡
+                <IconBolt className="inline h-4 w-4" />
               </button>
               <input
                 value={draft}
@@ -821,12 +1122,12 @@ export default function InboxClient() {
                 placeholder={
                   canSend ? "Escreva a mensagem e pressione Enter..." : "Conversa encerrada"
                 }
-                disabled={!canSend || sending || uploading}
+                disabled={!canSend}
                 className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
               />
               <button
                 type="submit"
-                disabled={!canSend || sending || uploading || !draft.trim()}
+                disabled={!canSend || !draft.trim()}
                 className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
               >
                 Enviar
@@ -964,9 +1265,9 @@ function ImageViewer({ src, onClose }: { src: string; onClose: () => void }) {
         }}
         onPointerDown={(e) => e.stopPropagation()}
         title="Fechar (Esc)"
-        className="viewer-btn absolute right-4 top-4 h-10 w-10 text-xl leading-none"
+        className="viewer-btn absolute right-4 top-4 flex h-10 w-10 items-center justify-center text-xl leading-none"
       >
-        ✕
+        <IconX className="h-5 w-5" />
       </button>
 
       {/* barra de acoes (vidro, rodape central) */}
@@ -1003,7 +1304,7 @@ function ImageViewer({ src, onClose }: { src: string; onClose: () => void }) {
           title="Baixar imagem"
           className="flex h-11 w-11 items-center justify-center text-lg leading-none"
         >
-          ⬇
+          <IconDownload className="h-5 w-5" />
         </a>
       </div>
 
@@ -1015,188 +1316,7 @@ function ImageViewer({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
-function playBeep() {
-  playSound("classico");
-}
 
-// sons de notificacao sintetizados (sem arquivos externos)
-export const SOUND_OPTIONS = [
-  { value: "classico", label: "Clássico" },
-  { value: "ping", label: "Ping" },
-  { value: "campainha", label: "Campainha" },
-  { value: "pop", label: "Pop" },
-] as const;
 
-function playSound(name: string) {
-  try {
-    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    void ctx.resume();
-    const t0 = ctx.currentTime;
-    const beep = (
-      freq: number,
-      at: number,
-      dur: number,
-      type: OscillatorType = "sine",
-      vol = 0.06
-    ) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = type;
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(vol, t0 + at);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + at + dur);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t0 + at);
-      osc.stop(t0 + at + dur);
-    };
-    switch (name) {
-      case "ping":
-        beep(880, 0, 0.12);
-        beep(1320, 0.12, 0.16);
-        break;
-      case "campainha":
-        beep(784, 0, 0.5, "triangle", 0.05);
-        beep(1046, 0.02, 0.5, "triangle", 0.035);
-        break;
-      case "pop":
-        beep(300, 0, 0.07, "square", 0.045);
-        beep(240, 0.1, 0.07, "square", 0.045);
-        break;
-      default: // classico
-        beep(880, 0, 0.35);
-    }
-    setTimeout(() => void ctx.close(), 900);
-  } catch {
-    /* ambiente sem suporte a audio */
-  }
-}
 
-function MessageBubble({
-  message,
-  onReact,
-  onOpenImage,
-}: {
-  message: MessageItem;
-  onReact?: (message: MessageItem, emoji: string) => void;
-  onOpenImage?: (src: string) => void;
-}) {
-  const isOut = message.direction === "OUTGOING";
 
-  let body: React.ReactNode = null;
-  if (message.mediaUrl) {
-    const src = `/api/media/${message.mediaUrl}`;
-    if (message.mediaType?.startsWith("image/")) {
-      body = (
-        <img
-          src={src}
-          alt={message.fileName ?? "imagem"}
-          loading="lazy"
-          // clique abre o visualizador (zoom + foto em tela cheia)
-          onClick={() => onOpenImage?.(src)}
-          className="-mb-1 max-w-[240px] cursor-zoom-in rounded-md hover:opacity-90"
-        />
-      );
-    } else if (message.mediaType?.startsWith("video/")) {
-      body = <video src={src} controls className="max-w-[240px] rounded-md" />;
-    } else if (message.mediaType?.startsWith("audio/")) {
-      body = <audio src={src} controls className="w-[240px]" />;
-    } else {
-      body = (
-        <a
-          href={`${src}?download=1`}
-          className="flex items-center gap-2 font-medium text-sky-700 underline"
-        >
-          📄 {message.fileName ?? "Arquivo anexado"}
-        </a>
-      );
-    }
-  }
-  if (message.content) {
-    body = (
-      <>
-        {body}
-        <p className="mt-1 whitespace-pre-wrap break-words">{message.content}</p>
-      </>
-    );
-  }
-  if (!body) body = <p className="italic text-slate-500">(mensagem sem conteúdo)</p>;
-
-  return (
-    <div className={`group mb-1.5 flex ${isOut ? "justify-end" : "justify-start"}`}>
-      {/* o limite de largura fica AQUI (containing block com largura definida):
-          em um wrapper shrink-to-fit o % não resolve e a bolha estoura/quebra errado */}
-      <div className="relative max-w-[70%]">
-        <div
-          className={`rounded-lg border px-3 py-2 text-sm shadow-sm ${
-            isOut
-              ? "border-emerald-300 bg-emerald-200 text-slate-900"
-              : "border-slate-300 bg-slate-200 text-slate-900"
-          }`}
-        >
-          {/* resposta citando outra mensagem ("responder" do WhatsApp) */}
-          {message.quotedSnippet ? (
-            <div className="mb-1 rounded-l border-l-4 border-slate-400 bg-slate-100 px-2 py-1">
-              <p className="text-xs font-semibold text-slate-600">
-                {message.quotedSender ? formatPhone(message.quotedSender) : "Mensagem citada"}
-              </p>
-              <p className="whitespace-pre-wrap break-words text-xs text-slate-600">
-                {message.quotedSnippet}
-              </p>
-            </div>
-          ) : null}
-          {/* grupo: nome do participante que enviou (nao aparece nas suas) */}
-          {!isOut && message.senderName ? (
-            <p className="mb-0.5 text-xs font-semibold text-sky-700">{message.senderName}</p>
-          ) : null}
-          {body}
-          <p
-            className={`mt-1 text-right text-xs ${
-              message.status === "FAILED" ? "font-semibold text-rose-600" : "text-slate-500"
-            }`}
-          >
-            {message.status === "FAILED" ? "falhou · " : ""}
-            {new Date(message.createdAt).toLocaleTimeString("pt-BR", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </p>
-        </div>
-        {/* reacao existente: chip clicavel (reagir de novo remove) */}
-        {message.reaction ? (
-          <button
-            onClick={() => onReact?.(message, message.reaction ?? "")}
-            title="Reação — clique para remover"
-            className={`absolute bottom-0 flex items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-xs shadow-sm ${
-              isOut ? "-left-2" : "-right-2"
-            }`}
-          >
-            {message.reaction}
-          </button>
-        ) : (
-          /* emojis rapidos no hover */
-          onReact && (
-            <div
-              className={`absolute top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 ${
-                isOut ? "-left-2" : "-right-2"
-              }`}
-            >
-              {QUICK_EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  onClick={() => onReact(message, e)}
-                  className="px-0.5 text-sm transition-transform hover:scale-110"
-                  title={`Reagir ${e}`}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          )
-        )}
-      </div>
-    </div>
-  );
-}
