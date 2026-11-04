@@ -14,8 +14,7 @@
     "db:generate:mysql": "prisma generate --schema prisma/schema.mysql.prisma",
     "db:studio:mysql": "prisma studio --schema prisma/schema.mysql.prisma",
     "db:migrate-to-mysql": "node scripts/sqlite-to-mysql.mjs",
-    "db:seed": "tsx prisma/seed.ts",
-    "postinstall": "prisma generate"
+    "db:seed": "tsx prisma/seed.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
