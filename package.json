@@ -5,6 +5,7 @@
   "description": "Central de atendimento multicanal (WhatsApp) multi-setor e multi-numero",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/prebuild.mjs",
     "build": "next build",
     "start": "next start",
     "start:wasmer": "node scripts/wasmer-start.mjs",
