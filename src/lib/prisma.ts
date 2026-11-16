@@ -15,15 +15,15 @@ function createPrismaClient(): PrismaClient {
     process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"];
 
   const dbUrl = process.env.DATABASE_URL ?? "";
-  if (dbUrl.startsWith("mysql://") || process.env.DB_HOST) {
+  if (!dbUrl.startsWith("file:")) {
     const adapter = new PrismaMariaDb(
-      process.env.DB_HOST
+      process.env.DB_HOST || !dbUrl.startsWith("mysql://")
         ? {
-            host: process.env.DB_HOST,
+            host: process.env.DB_HOST || "127.0.0.1",
             port: Number(process.env.DB_PORT) || 3306,
-            user: process.env.DB_USERNAME,
-            password: process.env.DB_PASSWORD,
-            database: process.env.DB_NAME,
+            user: process.env.DB_USERNAME || "build",
+            password: process.env.DB_PASSWORD || "",
+            database: process.env.DB_NAME || "build",
             connectionLimit: 5,
           }
         : dbUrl
