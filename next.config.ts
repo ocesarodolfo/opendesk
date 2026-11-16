@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   // Baileys/Pino/Qrcode nao devem ser empacotados pelo bundler do Next
   serverExternalPackages: ["@whiskeysockets/baileys", "pino", "qrcode", "@prisma/client"],
   outputFileTracingIncludes: {
-    "/*": ["./node_modules/.prisma/client/**/*"],
+    "/**/*": ["./node_modules/.prisma/client/**/*"],
   },
   eslint: {
     ignoreDuringBuilds: true,

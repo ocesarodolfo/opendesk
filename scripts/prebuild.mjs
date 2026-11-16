@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Na Wasmer (Anybuild), ANYBUILD_EDGEJS_ENGINE e' definido no Dockerfile.
@@ -24,6 +26,17 @@ if (isWasmerOrMysql) {
   );
   if (res.status !== 0) {
     process.exit(res.status ?? 1);
+  }
+
+  // O optimize-node-modules.sh da Wasmer apaga arquivos com permissao +x que nao sejam .wasm.
+  // Bibliotecas .so.node carregadas via dlopen precisam apenas de 0644.
+  const prismaClientDir = path.join(process.cwd(), "node_modules", ".prisma", "client");
+  if (fs.existsSync(prismaClientDir)) {
+    for (const entry of fs.readdirSync(prismaClientDir)) {
+      if (entry.endsWith(".node")) {
+        fs.chmodSync(path.join(prismaClientDir, entry), 0o644);
+      }
+    }
   }
 }
 
