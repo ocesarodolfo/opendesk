@@ -1,4 +1,4 @@
-# Central de Atendimento Multicanal
+# Central de Atendimento Multicanal 
 
 Sistema de atendimento via WhatsApp para **múltiplos setores** e **múltiplos números** em uma única aplicação, no estilo Chatwoot — atendimento interno e externo centralizado por setor.
 
