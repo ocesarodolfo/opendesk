@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { showToast } from "@/components/toast";
 import { IconStar } from "@/components/icons";
+import Modal from "@/components/modal";
 
 type UserItem = {
   id: string;
@@ -22,7 +23,13 @@ type SectorItem = {
 export default function UsuariosClient() {
   const [items, setItems] = useState<UserItem[]>([]);
   const [sectors, setSectors] = useState<SectorItem[]>([]);
-  const [editing, setEditing] = useState<string | null>(null); // id do usuario em edicao
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null); // id do usuario em edicao de setores
+  const [editingUser, setEditingUser] = useState<string | null>(null); // id do usuario em edicao de dados
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editRole, setEditRole] = useState<"ADMIN" | "AGENT">("AGENT");
+  const [editPassword, setEditPassword] = useState("");
   const [draftRoles, setDraftRoles] = useState<Record<string, string>>({}); // sectorId -> AGENT|SUPERVISOR
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -37,11 +44,55 @@ export default function UsuariosClient() {
   }
 
   function openEdit(item: UserItem) {
+    setEditingUser(null);
     setEditing(editing === item.id ? null : item.id);
     setDraftRoles(
       Object.fromEntries(item.sectors.map((s) => [s.id, s.role === "SUPERVISOR" ? "SUPERVISOR" : "AGENT"]))
     );
     setError(null);
+  }
+
+  function openEditUser(item: UserItem) {
+    setEditing(null);
+    if (editingUser === item.id) {
+      setEditingUser(null);
+      return;
+    }
+    setEditingUser(item.id);
+    setEditName(item.name);
+    setEditEmail(item.email);
+    setEditRole(item.role);
+    setEditPassword("");
+    setError(null);
+  }
+
+  async function saveUser(item: UserItem) {
+    setError(null);
+    if (editPassword && editPassword.length < 8) {
+      setError("A nova senha precisa ter ao menos 8 caracteres.");
+      return;
+    }
+    const payload: Record<string, unknown> = {
+      name: editName,
+      email: editEmail,
+      role: editRole,
+    };
+    if (editPassword) payload.password = editPassword;
+
+    const res = await fetch(`/api/users/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      setError(data?.error ?? "Nao foi possivel atualizar o usuario.");
+      return;
+    }
+    setEditingUser(null);
+    setEditPassword("");
+    showToast("Usuario atualizado.", "sucesso");
+    await load();
   }
 
   async function saveSectors(item: UserItem) {
@@ -84,6 +135,7 @@ export default function UsuariosClient() {
     setEmail("");
     setPassword("");
     setRole("AGENT");
+    setCreateOpen(false);
     await load();
   }
 
@@ -102,53 +154,81 @@ export default function UsuariosClient() {
 
   return (
     <div>
-      <form onSubmit={create} className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="min-w-[180px]">
-          <label className="block text-xs font-medium text-slate-600">Nome</label>
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </div>
-        <div className="min-w-[220px]">
-          <label className="block text-xs font-medium text-slate-600">E-mail</label>
-          <input
-            required
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </div>
-        <div className="min-w-[150px]">
-          <label className="block text-xs font-medium text-slate-600">Senha</label>
-          <input
-            required
-            type="password"
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600">Perfil</label>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as "ADMIN" | "AGENT")}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          >
-            <option value="AGENT">Atendente</option>
-            <option value="ADMIN">Administrador</option>
-          </select>
-        </div>
-        <button type="submit" className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">
-          Cadastrar
+      <div className="mb-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => {
+            setError(null);
+            setCreateOpen(true);
+          }}
+          className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+        >
+          Novo usuário
         </button>
-      </form>
-      {error && <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+      </div>
+
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Novo usuário">
+        <form onSubmit={create} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Nome</label>
+            <input
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600">E-mail</label>
+            <input
+              required
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Senha</label>
+            <input
+              required
+              type="password"
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Perfil</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as "ADMIN" | "AGENT")}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            >
+              <option value="AGENT">Atendente</option>
+              <option value="ADMIN">Administrador</option>
+            </select>
+          </div>
+          {error && <p className="rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setCreateOpen(false)}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+            >
+              Cadastrar
+            </button>
+          </div>
+        </form>
+      </Modal>
+      {!createOpen && error && <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -208,6 +288,12 @@ export default function UsuariosClient() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => openEditUser(item)}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      Editar
+                    </button>
+                    <button
                       onClick={() => openEdit(item)}
                       className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                     >
@@ -220,6 +306,57 @@ export default function UsuariosClient() {
                       {item.active ? "Inativar" : "Ativar"}
                     </button>
                   </div>
+                  {editingUser === item.id && (
+                    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        Editar usuário
+                      </p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          placeholder="Nome"
+                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
+                        />
+                        <input
+                          type="email"
+                          value={editEmail}
+                          onChange={(e) => setEditEmail(e.target.value)}
+                          placeholder="E-mail"
+                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
+                        />
+                        <select
+                          value={editRole}
+                          onChange={(e) => setEditRole(e.target.value as "ADMIN" | "AGENT")}
+                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
+                        >
+                          <option value="AGENT">Atendente</option>
+                          <option value="ADMIN">Administrador</option>
+                        </select>
+                        <input
+                          type="password"
+                          value={editPassword}
+                          onChange={(e) => setEditPassword(e.target.value)}
+                          placeholder="Nova senha (opcional, mín. 8)"
+                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => void saveUser(item)}
+                          className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          onClick={() => setEditingUser(null)}
+                          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {editing === item.id && item.role !== "ADMIN" && (
                     <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 p-3">
                       <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Setores do usuário</p>

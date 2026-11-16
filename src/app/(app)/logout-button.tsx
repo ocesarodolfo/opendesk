@@ -13,7 +13,7 @@ export default function LogoutButton() {
         router.replace("/login");
         router.refresh();
       }}
-      className="shrink-0 rounded-md border border-slate-700 p-2 text-slate-400 hover:bg-rose-600/20 hover:text-rose-300"
+      className="shrink-0 rounded-md border border-slate-200 p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-500"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"

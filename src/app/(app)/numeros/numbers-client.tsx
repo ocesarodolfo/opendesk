@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Modal from "@/components/modal";
 
 export type NumberItem = {
   id: string;
@@ -39,6 +40,7 @@ export default function NumbersClient({
 }) {
   const router = useRouter();
   const [numbers, setNumbers] = useState(initialNumbers);
+  const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [sectorId, setSectorId] = useState("");
   const [connecting, setConnecting] = useState<NumberItem | null>(null);
@@ -98,6 +100,7 @@ export default function NumbersClient({
     }
     setLabel("");
     setSectorId("");
+    setCreateOpen(false);
     setNumbers(await (await fetch("/api/numbers")).json());
   }
 
@@ -139,41 +142,68 @@ export default function NumbersClient({
   return (
     <div className="mt-6">
       {isAdmin && (
-        <form onSubmit={createNumber} className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex-1 min-w-[220px]">
-            <label className="block text-xs font-medium text-slate-600">Nome/apelido do número</label>
-            <input
-              required
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="Suporte — (11) 99999-0000"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-            />
-          </div>
-          <div className="min-w-[180px]">
-            <label className="block text-xs font-medium text-slate-600">Setor responsável</label>
-            <select
-              value={sectorId}
-              onChange={(e) => setSectorId(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+        <>
+          <div className="mb-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setCreateOpen(true);
+              }}
+              className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
             >
-              <option value="">— sem setor —</option>
-              {sectors.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              Novo número
+            </button>
           </div>
-          <button
-            type="submit"
-            className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
-          >
-            Cadastrar
-          </button>
-        </form>
+
+          <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Novo número">
+            <form onSubmit={createNumber} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600">Nome/apelido do número</label>
+                <input
+                  required
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="Suporte — (11) 99999-0000"
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600">Setor responsável</label>
+                <select
+                  value={sectorId}
+                  onChange={(e) => setSectorId(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                >
+                  <option value="">— sem setor —</option>
+                  {sectors.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {error && <p className="rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateOpen(false)}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                >
+                  Cadastrar
+                </button>
+              </div>
+            </form>
+          </Modal>
+        </>
       )}
-      {error && <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+      {!createOpen && error && <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">

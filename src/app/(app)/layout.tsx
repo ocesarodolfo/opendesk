@@ -22,9 +22,9 @@ export default async function AppLayout({
 
   return (
     <div className="flex min-h-screen">
-      <aside className="fixed inset-y-0 left-0 flex w-60 flex-col bg-slate-900 text-slate-300">
+      <aside className="fixed inset-y-0 left-0 flex w-60 flex-col border-r border-slate-200 bg-white text-slate-700">
         <div className="px-5 py-5">
-          <p className="text-sm font-bold uppercase tracking-wide text-white">
+          <p className="text-sm font-bold uppercase tracking-wide text-slate-900">
             Central de Atendimento
           </p>
         </div>
@@ -33,7 +33,7 @@ export default async function AppLayout({
             <Link
               key={item.href}
               href={item.href}
-              className="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-slate-800 hover:text-white"
+              className="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-slate-100 hover:text-slate-900"
             >
               <span>{item.label}</span>
               {/* nao lidas: badge verde, como as bolhas do WhatsApp */}
@@ -41,7 +41,7 @@ export default async function AppLayout({
             </Link>
           ))}
         </nav>
-        <div className="border-t border-slate-800 px-4 py-4">
+        <div className="border-t border-slate-200 px-4 py-4">
           <div className="flex items-center gap-2">
             <UserMenu name={session.name} role={session.role} />
             <LogoutButton />

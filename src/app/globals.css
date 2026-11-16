@@ -64,6 +64,8 @@ html.dark .border-slate-100 { border-color: #232837; }
 html.dark .border-slate-300 { border-color: #3a4155; }
 /* hover/hover-compound */
 html.dark .hover\:bg-slate-50:hover { background-color: #232837; }
+html.dark .hover\:bg-slate-100:hover { background-color: #232837; }
+html.dark .hover\:text-slate-900:hover { color: #f1f5f9; }
 /* cepilha o scroll no escuro */
 html.dark .chat-scroll::-webkit-scrollbar-thumb {
   background-color: #3a4155;

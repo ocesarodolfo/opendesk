@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { showToast } from "@/components/toast";
+import Modal from "@/components/modal";
 
 type SectorOption = { id: string; name: string; active: boolean };
 
@@ -17,6 +18,7 @@ type Reply = {
 export default function RespostasClient() {
   const [items, setItems] = useState<Reply[]>([]);
   const [sectors, setSectors] = useState<SectorOption[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
   const [shortcut, setShortcut] = useState("");
   const [content, setContent] = useState("");
   const [sectorId, setSectorId] = useState("");
@@ -55,6 +57,7 @@ export default function RespostasClient() {
     setShortcut("");
     setContent("");
     setSectorId("");
+    setCreateOpen(false);
     await load();
   }
 
@@ -82,53 +85,74 @@ export default function RespostasClient() {
 
   return (
     <div>
-      <form
-        onSubmit={create}
-        className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"
-      >
-        <div className="min-w-[160px]">
-          <label className="block text-xs font-medium text-slate-600">Atalho</label>
-          <input
-            required
-            value={shortcut}
-            onChange={(e) => setShortcut(e.target.value)}
-            placeholder="ex.: senha-ti"
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </div>
-        <div className="min-w-[420px] flex-1">
-          <label className="block text-xs font-medium text-slate-600">Mensagem</label>
-          <textarea
-            required
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            rows={2}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          />
-        </div>
-        <div className="min-w-[180px]">
-          <label className="block text-xs font-medium text-slate-600">Setor</label>
-          <select
-            value={sectorId}
-            onChange={(e) => setSectorId(e.target.value)}
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
-          >
-            <option value="">Todos os setores</option>
-            {sectors.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="mb-4 flex justify-end">
         <button
-          type="submit"
+          type="button"
+          onClick={() => {
+            setError(null);
+            setCreateOpen(true);
+          }}
           className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
         >
-          Adicionar
+          Nova resposta rápida
         </button>
-        {error && <p className="w-full text-sm text-rose-600">{error}</p>}
-      </form>
+      </div>
+
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Nova resposta rápida">
+        <form onSubmit={create} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Atalho</label>
+            <input
+              required
+              value={shortcut}
+              onChange={(e) => setShortcut(e.target.value)}
+              placeholder="ex.: senha-ti"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Mensagem</label>
+            <textarea
+              required
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600">Setor</label>
+            <select
+              value={sectorId}
+              onChange={(e) => setSectorId(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+            >
+              <option value="">Todos os setores</option>
+              {sectors.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {error && <p className="text-sm text-rose-600">{error}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setCreateOpen(false)}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+            >
+              Adicionar
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="w-full text-sm">

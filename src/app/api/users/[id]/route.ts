@@ -19,7 +19,19 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const data: { active?: boolean; role?: string; passwordHash?: string } = {};
+  const data: {
+    name?: string;
+    email?: string;
+    active?: boolean;
+    role?: string;
+    passwordHash?: string;
+  } = {};
+  if (typeof body.name === "string" && body.name.trim().length >= 2) {
+    data.name = body.name.trim();
+  }
+  if (typeof body.email === "string" && body.email.trim().includes("@")) {
+    data.email = body.email.trim().toLowerCase();
+  }
   if (typeof body.active === "boolean") data.active = body.active;
   if (typeof body.role === "string" && ["ADMIN", "AGENT"].includes(body.role)) data.role = body.role;
   if (typeof body.password === "string" && body.password.length >= 8) {
@@ -58,6 +70,15 @@ export async function PATCH(
   if (session.sub === id && data.active === false) {
     return NextResponse.json({ error: "Voce nao pode inativar o proprio cadastro." }, { status: 409 });
   }
+  if (data.email) {
+    const conflict = await prisma.user.findFirst({
+      where: { email: data.email, NOT: { id } },
+      select: { id: true },
+    });
+    if (conflict) {
+      return NextResponse.json({ error: "Ja existe outro usuario com este e-mail." }, { status: 409 });
+    }
+  }
 
   // os setores precisam existir (evita vinculos orfaos)
   if (memberships && memberships.length > 0) {
@@ -89,6 +110,8 @@ export async function PATCH(
   });
 
   const changes: string[] = [];
+  if (data.name !== undefined) changes.push(`nome=${data.name}`);
+  if (data.email !== undefined) changes.push(`email=${data.email}`);
   if (data.role !== undefined) changes.push(`papel=${data.role}`);
   if (data.active !== undefined) changes.push(data.active ? "ativado" : "inativado");
   if (data.passwordHash !== undefined) changes.push("senha redefinida");
