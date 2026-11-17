@@ -1,7 +1,11 @@
 import "server-only";
 import crypto from "node:crypto";
-import webpush from "web-push";
+import { createRequire } from "node:module";
+import type webpushTypes from "web-push";
 import { prisma } from "@/lib/prisma";
+
+const require = createRequire(import.meta.url);
+const webpush = require("web-push") as typeof webpushTypes;
 
 let configuredForKey: string | null = null;
 
