@@ -181,6 +181,108 @@ function extractText(msg: IncomingMessage): string {
   );
 }
 
+function extractMentionedJids(msg: IncomingMessage): string[] {
+  const m = msg.message;
+  if (!m) return [];
+  const cis = [
+    m.extendedTextMessage?.contextInfo,
+    m.imageMessage?.contextInfo,
+    m.videoMessage?.contextInfo,
+    m.documentMessage?.contextInfo,
+  ];
+  const out = new Set<string>();
+  for (const ci of cis) {
+    const list = (ci as { mentionedJid?: unknown } | null | undefined)?.mentionedJid;
+    if (Array.isArray(list)) {
+      for (const jid of list) {
+        if (typeof jid === "string" && jid.includes("@")) out.add(jid);
+      }
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Converte mencoes "@176398668947474" (LID ou telefone) no nome do contato
+ * (ou "Você" quando for o proprio numero conectado) usando contextInfo.mentionedJid.
+ */
+async function resolveMentions(
+  numberId: string,
+  text: string,
+  msg: IncomingMessage
+): Promise<string> {
+  if (!text || !text.includes("@")) return text;
+  const jids = extractMentionedJids(msg);
+  if (jids.length === 0) return text;
+
+  const session = sessions.get(numberId);
+  const labels = new Map<string, string>();
+  const unresolved: { rawDigits: string; normJid: string }[] = [];
+
+  for (const jid of jids) {
+    const rawDigits = digitsOnly(jid.split("@")[0].split(":")[0]);
+    if (!rawDigits) continue;
+    if (
+      (session?.selfLidDigits && rawDigits === session.selfLidDigits) ||
+      (session?.selfPnDigits && rawDigits === session.selfPnDigits)
+    ) {
+      labels.set(rawDigits, "Você");
+      continue;
+    }
+    const normJid = normalizeJid(jid) ?? jid;
+    unresolved.push({ rawDigits, normJid });
+  }
+
+  if (unresolved.length > 0) {
+    const normJids = unresolved.map((u) => u.normJid);
+    const rawList = unresolved.map((u) => u.rawDigits);
+    const contacts = await prisma.contact.findMany({
+      where: {
+        OR: [{ jid: { in: normJids } }, { phone: { in: rawList } }],
+      },
+      select: { jid: true, phone: true, name: true, pushName: true },
+    });
+
+    for (const u of unresolved) {
+      const hit = contacts.find(
+        (c) => c.jid === u.normJid || c.phone === u.rawDigits
+      );
+      if (hit) {
+        const display = hit.name || hit.pushName || hit.phone;
+        if (display) labels.set(u.rawDigits, display);
+        continue;
+      }
+
+      // Fallback LID -> PN via lidMapping do Baileys (quando disponivel)
+      try {
+        const sock = session?.socket as unknown as {
+          signalRepository?: { lidMapping?: { getPNForLID?: (j: string) => Promise<string | null> } };
+        } | undefined;
+        const pnJid = await sock?.signalRepository?.lidMapping?.getPNForLID?.(u.normJid);
+        const pnDigits = pnJid ? digitsOnly(pnJid.split("@")[0].split(":")[0]) : "";
+        if (pnDigits) {
+          const byPn = await prisma.contact.findUnique({
+            where: { phone: pnDigits },
+            select: { name: true, pushName: true, phone: true },
+          });
+          labels.set(u.rawDigits, byPn?.name || byPn?.pushName || pnDigits);
+        }
+      } catch {
+        /* lidMapping opcional */
+      }
+    }
+  }
+
+  if (labels.size === 0) return text;
+
+  let resolved = text;
+  for (const [digits, name] of labels.entries()) {
+    const re = new RegExp(`(?<!\\d)@${digits}(?!\\d)`, "g");
+    resolved = resolved.replace(re, `@${name}`);
+  }
+  return resolved;
+}
+
 /** Rotulo curto quando a mensagem citada e midia sem legenda. */
 function quotedMediaLabel(m: NonNullable<IncomingMessage["message"]>): string {
   if (m.imageMessage) return "[Imagem]";
@@ -638,9 +740,10 @@ export const waManager = {
           continue;
         }
 
-        const text = extractText(msg);
+        const rawText = extractText(msg);
         const media = extractMedia(msg);
-        if (!text && !media) continue; // sem conteudo tratavel
+        if (!rawText && !media) continue; // sem conteudo tratavel
+        const text = rawText ? await resolveMentions(numberId, rawText, msg) : rawText;
 
         // historico antigo (sync do pareamento) nao entra no inbox
         const ageMs = Date.now() - messageTimestampMs(msg);
