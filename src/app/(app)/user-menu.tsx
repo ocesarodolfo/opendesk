@@ -20,6 +20,7 @@ import {
   IconUser,
   IconCheck,
 } from "@/components/icons";
+import PushToggle from "@/components/push-toggle";
 
 type Theme = "light" | "dark" | "system";
 import type { ReactNode } from "react";
@@ -199,6 +200,7 @@ export default function UserMenu({ name, role }: { name: string; role: string })
                 ))}
               </div>
             ) : null}
+            <PushToggle />
           </div>
 
           <div className="border-t border-slate-200 py-1">

@@ -13,6 +13,7 @@ import pino from "pino";
 import { prisma } from "@/lib/prisma";
 import { emitRealtime } from "@/lib/realtime";
 import { saveMediaFile } from "@/lib/media";
+import { sendIncomingMessagePush } from "@/lib/push";
 
 const logger = pino({ level: "silent" });
 
@@ -950,6 +951,18 @@ export const waManager = {
       sectorId: conversation.sectorId,
       status: wasClosed ? "PENDING" : conversation.status,
     });
+
+    if (direction === "INCOMING") {
+      const senderTitle = contact.name?.trim() || contact.phone;
+      const preview = (text && text.trim()) || (mediaType ? "[Mídia]" : "Nova mensagem");
+      void sendIncomingMessagePush({
+        conversationId: conversation.id,
+        sectorId: conversation.sectorId,
+        assignedUserId: conversation.assignedUserId,
+        title: senderTitle,
+        body: preview.slice(0, 140),
+      }).catch((err) => console.warn("[push] erro ao disparar:", err));
+    }
   },
 
   async sendMessage(

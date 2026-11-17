@@ -40,7 +40,8 @@ model User {
   updatedAt    DateTime      @updatedAt
 
   memberships           SectorMembership[]
-  assignedConversations Conversation[]    @relation("AssignedUser")
+  assignedConversations Conversation[]     @relation("AssignedUser")
+  pushSubscriptions     PushSubscription[]
 }
 
 model Sector {
@@ -243,4 +244,18 @@ model AuditLog {
   @@index([createdAt])
   @@index([action, createdAt])
   @@index([entity, entityId, createdAt])
+}
+
+model PushSubscription {
+  id           String   @id @default(uuid())
+  userId       String
+  endpointHash String   @unique @db.VarChar(64)
+  endpoint     String   @db.Text
+  p256dh       String   @db.VarChar(255)
+  auth         String   @db.VarChar(255)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
