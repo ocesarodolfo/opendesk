@@ -138,7 +138,6 @@ export default function InboxClient() {
       setSoundName(getSound());
     };
     window.addEventListener(SOUND_EVENT, sync);
-    return () => window.removeEventListener(SOUND_EVENT, sync);
     void fetch("/api/users")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: UserOption[]) => setUsersList(list));
@@ -154,6 +153,7 @@ export default function InboxClient() {
     void fetch("/api/tags")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: TagItem[]) => setTagOptions(list));
+    return () => window.removeEventListener(SOUND_EVENT, sync);
   }, []);
 
   const loadList = useCallback(async (opts?: { cache?: boolean }) => {
