@@ -22,6 +22,7 @@ export default async function NumbersPage() {
     lastError: n.lastError,
     sectorId: n.sectorId,
     sectorName: n.sector?.name ?? null,
+    prefixAgent: n.prefixAgent,
   }));
 
   const sectorsDto = sectors.map((s) => ({ id: s.id, name: s.name }));
