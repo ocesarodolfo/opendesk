@@ -112,13 +112,21 @@ export default function InboxClient() {
   const [bulkApplying, setBulkApplying] = useState(false);
   const [quickReplies, setQuickReplies] = useState<Reply[]>([]);
   const [repliesOpen, setRepliesOpen] = useState(false);
+  const [replyIndex, setReplyIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<
+    { id: string; file: File; previewUrl: string | null }[]
+  >([]);
+  const [dragActive, setDragActive] = useState(false);
   const [tagOptions, setTagOptions] = useState<TagItem[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [tagEditing, setTagEditing] = useState(false);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const pendingFilesRef = useRef(pendingFiles);
+  pendingFilesRef.current = pendingFiles;
 
   // mantem o id da conversa aberta acessivel no listener SSE
   // (evita reconectar o EventSource a cada selecao)
@@ -301,6 +309,65 @@ export default function InboxClient() {
     stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   }, []);
 
+  // limpa object URLs ao desmontar
+  useEffect(() => {
+    return () => {
+      pendingFilesRef.current.forEach((p) => {
+        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+      });
+    };
+  }, []);
+
+  // auto-resize do textarea conforme o texto digitado
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [draft, selected?.conversation.id]);
+
+  function clearPendingFiles() {
+    setPendingFiles((prev) => {
+      prev.forEach((p) => {
+        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+      });
+      return [];
+    });
+  }
+
+  function removePendingFile(id: string) {
+    setPendingFiles((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  }
+
+  function stageFiles(fileList: FileList | File[]) {
+    const arr = Array.from(fileList);
+    if (arr.length === 0) return;
+    const valid: { id: string; file: File; previewUrl: string | null }[] = [];
+    for (const f of arr) {
+      if (f.size === 0) {
+        showToast(`Arquivo vazio ignorado: ${f.name}`, "erro");
+        continue;
+      }
+      if (f.size > 25 * 1024 * 1024) {
+        showToast(`${f.name} excede o limite de 25 MB.`, "erro");
+        continue;
+      }
+      valid.push({
+        id: crypto.randomUUID(),
+        file: f,
+        previewUrl: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
+      });
+    }
+    if (valid.length > 0) {
+      setPendingFiles((prev) => [...prev, ...valid]);
+      setTimeout(() => composerRef.current?.focus(), 0);
+    }
+  }
+
   // troca de conversa: sempre vai ao fim, sem animacao
   useEffect(() => {
     stickBottomRef.current = true;
@@ -315,10 +382,15 @@ export default function InboxClient() {
     }
   }, [selected?.messages.length]);
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
+  async function send(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!selected || !canSend) return;
+    if (pendingFiles.length > 0) {
+      await sendPendingFiles();
+      return;
+    }
     const text = draft.trim();
-    if (!text || !selected) return;
+    if (!text) return;
     const convId = selected.conversation.id;
     const conv = selected.conversation;
     // envio otimista: bolha aparece na hora (com prefixo do atendente, se ativo),
@@ -381,6 +453,7 @@ export default function InboxClient() {
 
   // abre conversa: cache local primeiro (insta) + skeleton enquanto revalida
   function openConversation(item: ConversationItem) {
+    clearPendingFiles();
     setSelected(null);
     setOpeningId(item.id);
     // abriu = leu no painel (badges zeram, como no WhatsApp)
@@ -399,6 +472,7 @@ export default function InboxClient() {
       snippet:
         (message.content || message.fileName || "Mídia").slice(0, 120),
     });
+    setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   // "Apagar para todos": revoke no WhatsApp + marca no banco
@@ -450,18 +524,16 @@ export default function InboxClient() {
     }
   }
 
-  // Colar (Ctrl+V) um arquivo da area de transferência envia como mídia —
-  // como o WhatsApp Web faz. Texto colado segue o caminho normal.
-  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+  // Colar (Ctrl+V) arquivos da area de transferencia prepara o envio agrupado
+  // com preview — como o WhatsApp Web faz. Texto colado segue o caminho normal.
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     if (!canSend || uploading) return;
-    const file = [...Array.from(e.clipboardData.files ?? [])].find(
-      (f) =>
-        f.size <= 25 * 1024 * 1024 &&
-        (f.type.startsWith("image/") || f.type.startsWith("video/") || f.type.startsWith("audio/"))
+    const files = Array.from(e.clipboardData.files ?? []).filter(
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || f.type.startsWith("audio/")
     );
-    if (file) {
+    if (files.length > 0) {
       e.preventDefault();
-      void uploadMedia(file);
+      stageFiles(files);
     }
   }
 
@@ -618,51 +690,22 @@ export default function InboxClient() {
     }
   }
 
-  async function uploadMedia(file: File) {
-    if (!selected) return;
-    // varios arquivos de imagem selecionados de uma vez => album em uma unica
-    // interacao (chave unica agrupa as imagens numa bolha so no painel)
-    if (fileInputRef.current?.files && fileInputRef.current.files.length > 1) {
-      await uploadAlbum(Array.from(fileInputRef.current.files));
-      return;
-    }
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.set("file", file);
-      form.set("caption", draft.trim());
-      const res = await fetch(`/api/conversations/${selected.conversation.id}/media`, {
-        method: "POST",
-        body: form,
-      });
-      if (res.ok) {
-        setDraft("");
-        await loadDetail(selected.conversation.id);
-        await loadList();
-      } else {
-        const data = await res.json().catch(() => null);
-        showToast(data?.error ?? "Nao foi possivel enviar o arquivo.", "erro");
-      }
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }
-
-  // album: envia N imagens em sequencia com a mesma groupKey; o painel
-  // reagrupa e mostra como uma unica bolha ("uma mensagem" na interacao)
-  async function uploadAlbum(files: File[]) {
-    if (!selected || files.length === 0) return;
+  // envia os arquivos agrupados (1 ou mais) com legenda opcional, como no WhatsApp
+  async function sendPendingFiles() {
+    if (!selected || pendingFiles.length === 0) return;
     const convId = selected.conversation.id;
-    // album: a legenda sai SEM prefixo aqui — o servidor (rota de midia)
-    // aplica sozinho, evitando prefixo duplo; e em linha propria
+    const items = [...pendingFiles];
     const caption = draft.trim();
-    const groupKey = crypto.randomUUID().slice(0, 8);
+    const groupKey = items.length > 1 ? crypto.randomUUID().slice(0, 8) : null;
+
     setUploading(true);
+    clearPendingFiles();
     setDraft("");
+
     let failed = false;
     try {
-      for (const file of files) {
+      for (let i = 0; i < items.length; i++) {
+        const { file } = items[i];
         setSelected((prev) =>
           prev && prev.conversation.id === convId
             ? {
@@ -670,11 +713,12 @@ export default function InboxClient() {
                 messages: [
                   ...prev.messages,
                   {
-                    id: `tmp-${groupKey}-${files.indexOf(file)}`,
+                    id: `tmp-${groupKey ?? "single"}-${i}`,
                     direction: "OUTGOING" as const,
-                    content: "",
+                    content: i === 0 ? caption : "",
                     createdAt: new Date().toISOString(),
                     status: "SENT",
+                    pending: true,
                     mediaType: file.type,
                     fileName: file.name,
                     mediaUrl: null,
@@ -686,20 +730,26 @@ export default function InboxClient() {
         );
         const form = new FormData();
         form.set("file", file);
-        form.set("caption", caption);
-        form.set("groupKey", groupKey);
-        const res = await fetch(`/api/conversations/${convId}/media`, { method: "POST", body: form });
+        // legenda vai apenas no primeiro arquivo do grupo para nao repetir no WhatsApp
+        form.set("caption", i === 0 ? caption : "");
+        if (groupKey) form.set("groupKey", groupKey);
+
+        const res = await fetch(`/api/conversations/${convId}/media`, {
+          method: "POST",
+          body: form,
+        });
         if (!res.ok) {
           const data = await res.json().catch(() => null);
-          showToast(data?.error ?? `Falha ao enviar a imagem ${file.name}.`, "erro");
+          showToast(data?.error ?? `Falha ao enviar ${file.name}.`, "erro");
           failed = true;
           break;
         }
       }
-      // recarrega apos a sequencia (substitui as bolhas otimistas pelas firmes)
       await loadDetail(convId);
       await loadList();
-      if (!failed) showToast(`${files.length} imagens enviadas.`, "sucesso");
+      if (!failed && items.length > 1) {
+        showToast(`${items.length} arquivos enviados.`, "sucesso");
+      }
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -707,7 +757,27 @@ export default function InboxClient() {
   }
 
   const c = selected?.conversation;
-  const canSend = c && c.status !== "CLOSED";
+  const canSend = Boolean(c && c.status !== "CLOSED");
+
+  // resposta rapida: aciona ao digitar "/..." no inicio ou pelo botao de raio
+  const slashMatch = draft.match(/^\/([^\s\n]*)$/);
+  const slashQuery = slashMatch ? slashMatch[1].toLowerCase() : "";
+  const isSlashOpen = Boolean(canSend && slashMatch);
+  const showReplies = Boolean(canSend && (repliesOpen || isSlashOpen));
+  const filteredQuickReplies = slashMatch
+    ? quickReplies.filter(
+        (r) =>
+          r.shortcut.toLowerCase().includes(slashQuery) ||
+          r.content.toLowerCase().includes(slashQuery)
+      )
+    : quickReplies;
+
+  function applyQuickReply(r: Reply) {
+    setDraft(r.content);
+    setRepliesOpen(false);
+    setReplyIndex(0);
+    setTimeout(() => composerRef.current?.focus(), 0);
+  }
 
   return (
     <div className="grid h-[calc(100vh-4rem)] min-w-0 grid-cols-[360px_minmax(0,1fr)] gap-4 overflow-hidden">
@@ -869,7 +939,37 @@ export default function InboxClient() {
       </div>
 
       {/* ---- conversa aberta ---- */}
-      <div className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div
+        onDragOver={(e) => {
+          if (!canSend || uploading) return;
+          if (e.dataTransfer.types.includes("Files")) {
+            e.preventDefault();
+            setDragActive(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDragActive(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragActive(false);
+          if (!canSend || uploading) return;
+          if (e.dataTransfer.files?.length) {
+            stageFiles(e.dataTransfer.files);
+          }
+        }}
+        className="relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white"
+      >
+        {dragActive && canSend ? (
+          <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center border-2 border-dashed border-sky-500 bg-sky-50/90 backdrop-blur-[1px]">
+            <div className="rounded-lg bg-white px-5 py-3 text-center shadow-sm">
+              <p className="text-sm font-semibold text-sky-700">Solte os arquivos aqui para anexar</p>
+              <p className="text-xs text-slate-500">Eles serão agrupados antes do envio</p>
+            </div>
+          </div>
+        ) : null}
         {!selected ? (
           openingId ? (
             /* skeleton do detalhe: cabecalho + bolhas pulsando na corredor */
@@ -1069,10 +1169,10 @@ export default function InboxClient() {
               <div ref={bottomRef} />
             </div>
 
-            <form onSubmit={send} className="relative flex gap-2 border-t border-slate-100 p-3">
-              {/* barra de resposta: citacao acima do input (cancela com x) */}
+            <div className="relative border-t border-slate-100 bg-white">
+              {/* barra de resposta: citacao acima do composer (cancela com x) */}
               {replyTo && canSend ? (
-                <div className="chat-quote absolute -top-10 right-3 left-3 z-10 flex items-center justify-between rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 shadow-sm">
+                <div className="chat-quote mx-3 mt-2 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
                   <div className="min-w-0">
                     <p className="text-xs font-semibold text-sky-700">↩ {replyTo.name}</p>
                     <p className="truncate text-xs text-slate-600">{replyTo.snippet}</p>
@@ -1087,65 +1187,88 @@ export default function InboxClient() {
                   </button>
                 </div>
               ) : null}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                accept="image/*,video/*,audio/*,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void uploadMedia(file);
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!canSend}
-                title="Anexar imagem, documento, áudio ou vídeo (até 25 MB)"
-                className="rounded-md border border-slate-300 px-3 text-base text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              >
-                <IconPaperclip className="inline h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setRepliesOpen((o) => !o)}
-                title="Respostas rápidas"
-                className="rounded-md border border-slate-300 px-3 text-base text-slate-600 hover:bg-slate-50"
-              >
-                <IconBolt className="inline h-4 w-4" />
-              </button>
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onPaste={(e) => void handlePaste(e)}
-                placeholder={
-                  canSend ? "Escreva a mensagem e pressione Enter..." : "Conversa encerrada"
-                }
-                disabled={!canSend}
-                className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
-              />
-              <button
-                type="submit"
-                disabled={!canSend || !draft.trim()}
-                className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
-              >
-                Enviar
-              </button>
-              {repliesOpen && (
-                <div className="absolute bottom-16 right-8 z-10 max-h-[40vh] w-96 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                  {quickReplies.length === 0 ? (
-                    <p className="p-3 text-xs text-slate-400">Nenhuma resposta rápida disponível.</p>
+
+              {/* preview agrupado de arquivos antes do envio (estilo WhatsApp) */}
+              {pendingFiles.length > 0 && canSend ? (
+                <div className="mx-3 mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs font-medium text-slate-600">
+                      {pendingFiles.length}{" "}
+                      {pendingFiles.length === 1 ? "arquivo selecionado" : "arquivos agrupados"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearPendingFiles}
+                      className="text-xs text-slate-500 hover:text-rose-600"
+                    >
+                      Limpar tudo
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    {pendingFiles.map((item) => (
+                      <div
+                        key={item.id}
+                        className="relative shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white"
+                      >
+                        {item.previewUrl ? (
+                          <img
+                            src={item.previewUrl}
+                            alt={item.file.name}
+                            className="h-16 w-16 object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-16 w-36 flex-col justify-center px-2.5">
+                            <p className="truncate text-xs font-medium text-slate-700">
+                              {item.file.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {(item.file.size / 1024).toFixed(0)} KB
+                            </p>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removePendingFile(item.id)}
+                          title="Remover arquivo"
+                          className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/65 text-white hover:bg-rose-600"
+                        >
+                          <IconX className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Adicionar mais arquivos"
+                      className="flex h-16 w-14 shrink-0 items-center justify-center rounded-md border border-dashed border-slate-300 text-lg font-medium text-slate-400 hover:border-sky-400 hover:text-sky-600"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* popover de respostas rapidas (via "/" ou botao de raio) */}
+              {showReplies ? (
+                <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-h-[40vh] max-w-md overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                  {filteredQuickReplies.length === 0 ? (
+                    <p className="p-3 text-xs text-slate-400">
+                      {slashMatch
+                        ? "Nenhuma resposta rápida encontrada."
+                        : "Nenhuma resposta rápida disponível."}
+                    </p>
                   ) : (
-                    quickReplies.map((r) => (
+                    filteredQuickReplies.map((r, idx) => (
                       <button
                         key={r.id}
                         type="button"
-                        onClick={() => {
-                          setDraft(r.content);
-                          setRepliesOpen(false);
-                        }}
-                        className="block w-full border-b border-slate-100 px-3 py-2 text-left hover:bg-sky-50"
+                        onClick={() => applyQuickReply(r)}
+                        onMouseEnter={() => setReplyIndex(idx)}
+                        className={`block w-full border-b border-slate-100 px-3 py-2 text-left last:border-b-0 ${
+                          idx === Math.min(replyIndex, filteredQuickReplies.length - 1)
+                            ? "bg-sky-50"
+                            : "hover:bg-slate-50"
+                        }`}
                       >
                         <span className="font-mono text-xs font-semibold text-sky-700">
                           {r.shortcut}
@@ -1156,8 +1279,119 @@ export default function InboxClient() {
                     ))
                   )}
                 </div>
-              )}
-            </form>
+              ) : null}
+
+              <form onSubmit={send} className="flex items-end gap-2 p-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  accept="image/*,video/*,audio/*,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
+                  onChange={(e) => {
+                    if (e.target.files?.length) stageFiles(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!canSend || uploading}
+                  title="Anexar imagem, documento, áudio ou vídeo (até 25 MB)"
+                  className="h-9 shrink-0 rounded-md border border-slate-300 px-3 text-base text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  <IconPaperclip className="inline h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplyIndex(0);
+                    setRepliesOpen((o) => !o);
+                  }}
+                  disabled={!canSend}
+                  title="Respostas rápidas (ou digite /)"
+                  className={`h-9 shrink-0 rounded-md border px-3 text-base disabled:opacity-50 ${
+                    showReplies
+                      ? "border-sky-400 bg-sky-50 text-sky-700"
+                      : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <IconBolt className="inline h-4 w-4" />
+                </button>
+                <textarea
+                  ref={composerRef}
+                  rows={1}
+                  value={draft}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setReplyIndex(0);
+                  }}
+                  onPaste={handlePaste}
+                  onKeyDown={(e) => {
+                    if (showReplies && filteredQuickReplies.length > 0) {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setReplyIndex((i) => (i + 1) % filteredQuickReplies.length);
+                        return;
+                      }
+                      if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setReplyIndex((i) =>
+                          (i - 1 + filteredQuickReplies.length) % filteredQuickReplies.length
+                        );
+                        return;
+                      }
+                      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                        e.preventDefault();
+                        const chosen =
+                          filteredQuickReplies[
+                            Math.min(replyIndex, filteredQuickReplies.length - 1)
+                          ];
+                        if (chosen) applyQuickReply(chosen);
+                        return;
+                      }
+                    }
+                    if (e.key === "Escape") {
+                      if (repliesOpen) {
+                        e.preventDefault();
+                        setRepliesOpen(false);
+                        return;
+                      }
+                      if (replyTo) {
+                        e.preventDefault();
+                        setReplyTo(null);
+                        return;
+                      }
+                    }
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                  placeholder={
+                    !canSend
+                      ? "Conversa encerrada"
+                      : pendingFiles.length > 0
+                        ? "Adicione uma legenda (opcional) e pressione Enter..."
+                        : "Escreva a mensagem (Shift+Enter quebra linha, / para rápidas)..."
+                  }
+                  disabled={!canSend || uploading}
+                  className="max-h-[140px] min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    !canSend ||
+                    uploading ||
+                    sending ||
+                    (!draft.trim() && pendingFiles.length === 0)
+                  }
+                  className="h-9 shrink-0 rounded-md bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {uploading ? "Enviando..." : "Enviar"}
+                </button>
+              </form>
+            </div>
           </>
         )}
       </div>
