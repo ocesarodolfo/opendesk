@@ -45,7 +45,7 @@ export default function UsuariosClient() {
 
   function openEdit(item: UserItem) {
     setEditingUser(null);
-    setEditing(editing === item.id ? null : item.id);
+    setEditing(item.id);
     setDraftRoles(
       Object.fromEntries(item.sectors.map((s) => [s.id, s.role === "SUPERVISOR" ? "SUPERVISOR" : "AGENT"]))
     );
@@ -54,10 +54,6 @@ export default function UsuariosClient() {
 
   function openEditUser(item: UserItem) {
     setEditing(null);
-    if (editingUser === item.id) {
-      setEditingUser(null);
-      return;
-    }
     setEditingUser(item.id);
     setEditName(item.name);
     setEditEmail(item.email);
@@ -111,6 +107,7 @@ export default function UsuariosClient() {
       return;
     }
     setEditing(null);
+    showToast("Setores atualizados.", "sucesso");
     await load();
   }
 
@@ -228,7 +225,187 @@ export default function UsuariosClient() {
           </div>
         </form>
       </Modal>
-      {!createOpen && error && <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+
+      {(() => {
+        const editingUserItem = items.find((u) => u.id === editingUser) ?? null;
+        const editingSectorsItem = items.find((u) => u.id === editing) ?? null;
+        return (
+          <>
+            <Modal
+              open={Boolean(editingUserItem)}
+              onClose={() => {
+                setEditingUser(null);
+                setError(null);
+              }}
+              title="Editar usuário"
+            >
+              {editingUserItem && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void saveUser(editingUserItem);
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600">Nome</label>
+                    <input
+                      required
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600">E-mail</label>
+                    <input
+                      required
+                      type="email"
+                      value={editEmail}
+                      onChange={(e) => setEditEmail(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600">Perfil</label>
+                    <select
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value as "ADMIN" | "AGENT")}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    >
+                      <option value="AGENT">Atendente</option>
+                      <option value="ADMIN">Administrador</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Nova senha (opcional, mín. 8 caracteres)
+                    </label>
+                    <input
+                      type="password"
+                      value={editPassword}
+                      onChange={(e) => setEditPassword(e.target.value)}
+                      placeholder="Deixe em branco para manter a atual"
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+                  {error && (
+                    <p className="rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+                  )}
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingUser(null);
+                        setError(null);
+                      }}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                </form>
+              )}
+            </Modal>
+
+            <Modal
+              open={Boolean(editingSectorsItem)}
+              onClose={() => {
+                setEditing(null);
+                setError(null);
+              }}
+              title={
+                editingSectorsItem
+                  ? `Setores de ${editingSectorsItem.name}`
+                  : "Setores do usuário"
+              }
+            >
+              {editingSectorsItem && (
+                <div className="space-y-4">
+                  {editingSectorsItem.role === "ADMIN" ? (
+                    <p className="rounded-md bg-slate-50 p-3 text-sm text-slate-600">
+                      Usuários com perfil <strong>Administrador</strong> têm acesso automático a todos os setores.
+                    </p>
+                  ) : sectors.length === 0 ? (
+                    <p className="text-sm text-slate-500">Nenhum setor ativo cadastrado.</p>
+                  ) : (
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {sectors.map((s) => (
+                        <label
+                          key={s.id}
+                          className="flex items-center justify-between gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={s.id in draftRoles}
+                              onChange={(e) =>
+                                setDraftRoles((prev) => {
+                                  const next = { ...prev };
+                                  if (e.target.checked) next[s.id] = next[s.id] ?? "AGENT";
+                                  else delete next[s.id];
+                                  return next;
+                                })
+                              }
+                            />
+                            <span>{s.name}</span>
+                          </span>
+                          {s.id in draftRoles ? (
+                            <select
+                              value={draftRoles[s.id]}
+                              onChange={(e) =>
+                                setDraftRoles((prev) => ({ ...prev, [s.id]: e.target.value }))
+                              }
+                              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 focus:border-sky-500 focus:outline-none"
+                            >
+                              <option value="AGENT">Atendente</option>
+                              <option value="SUPERVISOR">Supervisor</option>
+                            </select>
+                          ) : null}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {error && (
+                    <p className="rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+                  )}
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(null);
+                        setError(null);
+                      }}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      {editingSectorsItem.role === "ADMIN" ? "Fechar" : "Cancelar"}
+                    </button>
+                    {editingSectorsItem.role !== "ADMIN" && (
+                      <button
+                        type="button"
+                        onClick={() => void saveSectors(editingSectorsItem)}
+                        className="rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700"
+                      >
+                        Salvar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Modal>
+          </>
+        );
+      })()}
+
+      {!createOpen && !editingUser && !editing && error && (
+        <p className="mb-4 rounded bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+      )}
 
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
@@ -306,111 +483,6 @@ export default function UsuariosClient() {
                       {item.active ? "Inativar" : "Ativar"}
                     </button>
                   </div>
-                  {editingUser === item.id && (
-                    <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                        Editar usuário
-                      </p>
-                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          placeholder="Nome"
-                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
-                        />
-                        <input
-                          type="email"
-                          value={editEmail}
-                          onChange={(e) => setEditEmail(e.target.value)}
-                          placeholder="E-mail"
-                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
-                        />
-                        <select
-                          value={editRole}
-                          onChange={(e) => setEditRole(e.target.value as "ADMIN" | "AGENT")}
-                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
-                        >
-                          <option value="AGENT">Atendente</option>
-                          <option value="ADMIN">Administrador</option>
-                        </select>
-                        <input
-                          type="password"
-                          value={editPassword}
-                          onChange={(e) => setEditPassword(e.target.value)}
-                          placeholder="Nova senha (opcional, mín. 8)"
-                          className="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-sky-500 focus:outline-none"
-                        />
-                      </div>
-                      <div className="mt-3 flex gap-2">
-                        <button
-                          onClick={() => void saveUser(item)}
-                          className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
-                        >
-                          Salvar
-                        </button>
-                        <button
-                          onClick={() => setEditingUser(null)}
-                          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {editing === item.id && item.role !== "ADMIN" && (
-                    <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Setores do usuário</p>
-                      {sectors.length === 0 ? (
-                        <p className="mt-2 text-xs text-slate-500">Nenhum setor ativo cadastrado.</p>
-                      ) : (
-                        <div className="mt-2 space-y-1">
-                          {sectors.map((s) => (
-                            <label key={s.id} className="flex items-center gap-2 text-sm text-slate-700">
-                              <input
-                                type="checkbox"
-                                checked={s.id in draftRoles}
-                                onChange={(e) =>
-                                  setDraftRoles((prev) => {
-                                    const next = { ...prev };
-                                    if (e.target.checked) next[s.id] = next[s.id] ?? "AGENT";
-                                    else delete next[s.id];
-                                    return next;
-                                  })
-                                }
-                              />
-                              {s.name}
-                              {s.id in draftRoles ? (
-                                <select
-                                  value={draftRoles[s.id]}
-                                  onChange={(e) =>
-                                    setDraftRoles((prev) => ({ ...prev, [s.id]: e.target.value }))
-                                  }
-                                  className="ml-2 rounded border-slate-300 px-1 py-0.5 text-xs text-slate-600 focus:border-sky-500 focus:outline-none"
-                                >
-                                  <option value="AGENT">Atendente</option>
-                                  <option value="SUPERVISOR">Supervisor</option>
-                                </select>
-                              ) : null}
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                      <div className="mt-3 flex gap-2">
-                        <button
-                          onClick={() => void saveSectors(item)}
-                          className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
-                        >
-                          Salvar
-                        </button>
-                        <button
-                          onClick={() => setEditing(null)}
-                          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </td>
               </tr>
             ))}

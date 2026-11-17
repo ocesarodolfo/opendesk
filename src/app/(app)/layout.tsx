@@ -1,8 +1,7 @@
 import { requireSession } from "@/lib/auth";
-import Link from "next/link";
 import UserMenu from "./user-menu";
 import LogoutButton from "./logout-button";
-import InboxUnreadBadge from "@/components/inbox-unread-badge";
+import SidebarNav from "./sidebar-nav";
 import { ToastHost } from "@/components/toast";
 
 const NAV = [
@@ -28,19 +27,11 @@ export default async function AppLayout({
             Central de Atendimento
           </p>
         </div>
-        <nav className="flex-1 space-y-1 px-3">
-          {NAV.filter((item) => !item.adminOnly || session.role === "ADMIN").map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-slate-100 hover:text-slate-900"
-            >
-              <span>{item.label}</span>
-              {/* nao lidas: badge verde, como as bolhas do WhatsApp */}
-              {item.href === "/inbox" ? <InboxUnreadBadge /> : null}
-            </Link>
-          ))}
-        </nav>
+        <SidebarNav
+          items={NAV.filter((item) => !item.adminOnly || session.role === "ADMIN").map(
+            ({ href, label }) => ({ href, label })
+          )}
+        />
         <div className="border-t border-slate-200 px-4 py-4">
           <div className="flex items-center gap-2">
             <UserMenu name={session.name} role={session.role} />
