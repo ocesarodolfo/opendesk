@@ -17,6 +17,7 @@ import {
 
 type Status = "PENDING" | "OPEN" | "CLOSED";
 type StatusFilter = Status | "ALL";
+type QuickFilter = "ALL" | "MINE" | "UNASSIGNED" | "UNREAD";
 
 type ConversationItem = {
   id: string;
@@ -66,6 +67,24 @@ function formatPhone(d: string): string {
   return `+${d}`;
 }
 
+// Timestamp compacto para a lista (hoje: HH:mm, ontem: Ontem, ano: dd/MM, antigo: dd/MM/yy)
+function formatShortTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+  if (diffDays === 0) {
+    return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+  if (diffDays === 1) return "Ontem";
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+  }
+  return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+}
+
 // classes estaticas por cor de etiqueta (nao posso montar dinamicamente p/ Tailwind)
 const TAG_CHIP: Record<string, string> = {
   slate: "bg-slate-100 text-slate-600",
@@ -87,10 +106,15 @@ const TAG_DOT: Record<string, string> = {
 
 export default function InboxClient() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("PENDING");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("ALL");
+  const [tagFilter, setTagFilter] = useState("");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [selected, setSelected] = useState<ConversationDetail | null>(null);
   const [draft, setDraft] = useState("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   // carga em progresso para os skeletons (lista e detalhe)
   const [listLoading, setListLoading] = useState(true);
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -125,6 +149,10 @@ export default function InboxClient() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const draftsRef = useRef<Record<string, string>>({});
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const pendingFilesRef = useRef(pendingFiles);
   pendingFilesRef.current = pendingFiles;
 
@@ -164,12 +192,33 @@ export default function InboxClient() {
     return () => window.removeEventListener(SOUND_EVENT, sync);
   }, []);
 
+  // debounce na busca para evitar requisicoes a cada tecla
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // atalhos globais: Ctrl/Cmd+K foca a busca; Esc fecha painel de detalhes
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      } else if (e.key === "Escape" && detailsOpen) {
+        setDetailsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [detailsOpen]);
+
   const loadList = useCallback(async (opts?: { cache?: boolean }) => {
     const params = new URLSearchParams();
     if (statusFilter !== "ALL") params.set("status", statusFilter);
-    if (query.trim()) params.set("q", query.trim());
+    if (debouncedQuery.trim()) params.set("q", debouncedQuery.trim());
     const qs = params.toString();
-    const cacheKey = `atende_conv_cache:${statusFilter}${query.trim() ? `|${query.trim()}` : ""}`;
+    const cacheKey = `atende_conv_cache:${statusFilter}${debouncedQuery.trim() ? `|${debouncedQuery.trim()}` : ""}`;
     setListLoading(true);
     // cache local: renderiza a lista na hora (stale-while-revalidate)
     if (opts?.cache) {
@@ -194,7 +243,7 @@ export default function InboxClient() {
     // mais skeleton (o vidro nunca fica vazio — mostra o anterior e revalida)
     if (res.ok) firstLoadedRef.current = true;
     setListLoading(false);
-  }, [statusFilter, query]);
+  }, [statusFilter, debouncedQuery]);
 
   const loadDetail = useCallback(async (id: string, opts?: { cache?: boolean }) => {
     setRepliesOpen(false);
@@ -306,8 +355,18 @@ export default function InboxClient() {
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    stickBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    stickBottomRef.current = nearBottom;
+    setShowScrollBottom(!nearBottom);
   }, []);
+
+  function scrollToBottom(smooth = true) {
+    stickBottomRef.current = true;
+    setShowScrollBottom(false);
+    bottomRef.current?.scrollIntoView({
+      behavior: (smooth ? "smooth" : "instant") as ScrollBehavior,
+    });
+  }
 
   // limpa object URLs ao desmontar
   useEffect(() => {
@@ -371,6 +430,7 @@ export default function InboxClient() {
   // troca de conversa: sempre vai ao fim, sem animacao
   useEffect(() => {
     stickBottomRef.current = true;
+    setShowScrollBottom(false);
     bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
   }, [selected?.conversation.id]);
 
@@ -414,6 +474,7 @@ export default function InboxClient() {
         : prev
     );
     setDraft("");
+    delete draftsRef.current[convId];
     const reply = replyTo;
     setReplyTo(null);
     setSending(true);
@@ -451,8 +512,14 @@ export default function InboxClient() {
     }
   }
 
-  // abre conversa: cache local primeiro (insta) + skeleton enquanto revalida
+  // abre conversa: salva rascunho anterior, restaura rascunho da nova e carrega
   function openConversation(item: ConversationItem) {
+    const prevId = selectedIdRef.current;
+    if (prevId) {
+      if (draftRef.current.trim()) draftsRef.current[prevId] = draftRef.current;
+      else delete draftsRef.current[prevId];
+    }
+    setDraft(draftsRef.current[item.id] ?? "");
     clearPendingFiles();
     setSelected(null);
     setOpeningId(item.id);
@@ -701,6 +768,7 @@ export default function InboxClient() {
     setUploading(true);
     clearPendingFiles();
     setDraft("");
+    delete draftsRef.current[convId];
 
     let failed = false;
     try {
@@ -779,10 +847,23 @@ export default function InboxClient() {
     setTimeout(() => composerRef.current?.focus(), 0);
   }
 
+  // filtros rapidos client-side sobre a lista carregada
+  const visibleConversations = conversations.filter((item) => {
+    if (quickFilter === "MINE" && item.assignedUserId !== me?.id) return false;
+    if (quickFilter === "UNASSIGNED" && item.assignedUserId !== null) return false;
+    if (quickFilter === "UNREAD" && (item.unreadCount ?? 0) === 0) return false;
+    if (tagFilter && !(item.contactTags ?? []).some((t) => t.id === tagFilter)) return false;
+    return true;
+  });
+
   return (
-    <div className="grid h-[calc(100vh-4rem)] min-w-0 grid-cols-[360px_minmax(0,1fr)] gap-4 overflow-hidden">
+    <div className="grid h-[calc(100vh-4rem)] min-w-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
       {/* ---- lista de conversas ---- */}
-      <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div
+        className={`${
+          selected || openingId ? "hidden lg:flex" : "flex"
+        } flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
+      >
         <div className="border-b border-slate-100 p-3">
           <div className="grid grid-cols-4 gap-1 rounded-md bg-slate-100 p-1 text-xs font-medium">
             {([["ALL", "Todos"], ["PENDING", "Pendente"], ["OPEN", "Aberto"], ["CLOSED", "Encerrado"]] as const).map(
@@ -790,22 +871,64 @@ export default function InboxClient() {
                 <button
                   key={s}
                   onClick={() => setStatusFilter(s as StatusFilter)}
-                  className={`rounded px-2 py-1 ${
+                  className={`rounded px-1.5 py-1 ${
                     statusFilter === s ? "bg-white shadow text-slate-900" : "text-slate-500"
                   }`}
                 >
                   {label}
+                  {statusFilter === s ? (
+                    <span className="ml-1 text-[10px] text-slate-400">
+                      ({visibleConversations.length})
+                    </span>
+                  ) : null}
                 </button>
               )
             )}
           </div>
           <input
+            ref={searchInputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar contato ou telefone..."
+            placeholder="Buscar contato ou telefone (Ctrl+K)..."
             className="mt-2 w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm focus:border-sky-500 focus:outline-none"
           />
-          <div className="mt-2 flex gap-1">
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {(
+              [
+                ["ALL", "Todas"],
+                ["MINE", "Minhas"],
+                ["UNASSIGNED", "Sem atendente"],
+                ["UNREAD", "Não lidas"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setQuickFilter(k)}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  quickFilter === k
+                    ? "bg-sky-600 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            {tagOptions.length > 0 && (
+              <select
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+                title="Filtrar por etiqueta"
+                className="ml-auto max-w-[110px] rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600 focus:border-sky-500 focus:outline-none"
+              >
+                <option value="">Etiqueta...</option>
+                {tagOptions.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {canBulk && (
               <button
                 onClick={() => {
@@ -813,13 +936,13 @@ export default function InboxClient() {
                   setBulkSelected(new Set());
                 }}
                 title="Atribuição em lote (supervisor)"
-                className={`rounded-md border px-3 py-1 text-xs font-semibold ${
+                className={`rounded-md border px-2.5 py-0.5 text-[11px] font-semibold ${
                   bulkMode
                     ? "border-violet-500 bg-violet-100 text-violet-700"
-                    : "border-slate-200 px-3 py-1 text-slate-500 hover:bg-slate-50"
+                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
                 }`}
               >
-                <IconCheckboxOn className="inline h-4 w-4 align-[-2px] text-violet-600" /> Lote
+                <IconCheckboxOn className="inline h-3.5 w-3.5 align-[-2px] text-violet-600" /> Lote
               </button>
             )}
           </div>
@@ -866,10 +989,10 @@ export default function InboxClient() {
                 </div>
               ))
             : null}
-          {!listLoading && conversations.length === 0 && (
+          {!listLoading && visibleConversations.length === 0 && (
             <p className="p-6 text-center text-sm text-slate-400">Nenhuma conversa nessa lista.</p>
           )}
-          {conversations.map((item) => (
+          {visibleConversations.map((item) => (
             <button
               key={item.id}
               onClick={() =>
@@ -920,8 +1043,11 @@ export default function InboxClient() {
                 {item.status !== "CLOSED" ? (item.lastMessage || "(sem texto)") : ""}
               </p>
               <div className="mt-1 flex items-center justify-between gap-2">
-                <p className="truncate text-xs text-slate-400">
-                  {new Date(item.lastMessageAt).toLocaleString("pt-BR")}
+                <p
+                  className="truncate text-xs text-slate-400"
+                  title={new Date(item.lastMessageAt).toLocaleString("pt-BR")}
+                >
+                  {formatShortTime(item.lastMessageAt)}
                 </p>
                 {/* nao lidas: bolinha/chip verde como no WhatsApp */}
                 {(item.unreadCount ?? 0) > 0 ? (
@@ -960,7 +1086,9 @@ export default function InboxClient() {
             stageFiles(e.dataTransfer.files);
           }
         }}
-        className="relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white"
+        className={`${
+          !selected && !openingId ? "hidden lg:flex" : "flex"
+        } relative min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
       >
         {dragActive && canSend ? (
           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center border-2 border-dashed border-sky-500 bg-sky-50/90 backdrop-blur-[1px]">
@@ -993,139 +1121,81 @@ export default function InboxClient() {
           )
         ) : (
           <>
-            {/* cabecalho: esquerda flexivel (nome truncate), direita compacta */}
-            <div className="flex min-w-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-3">
-              <div className="min-w-0">
-                {editingName ? (
-                  <div className="flex items-center gap-1">
-                    <input
-                      value={nameDraft}
-                      onChange={(e) => setNameDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void saveContactName(nameDraft.trim() || null);
-                        if (e.key === "Escape") setEditingName(false);
-                      }}
-                      maxLength={120}
-                      autoFocus
-                      className="w-56 rounded-md border border-sky-400 px-2 py-1 text-sm focus:outline-none"
-                      placeholder="Nome do contato"
-                    />
-                    <button
-                      onClick={() => void saveContactName(nameDraft.trim() || null)}
-                      className="rounded-md bg-sky-600 px-2 py-1 text-xs font-semibold text-white hover:bg-sky-700"
-                    >
-                      Ok
-                    </button>
-                    <button
-                      onClick={() => setEditingName(false)}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600"
-                    >
-                      <IconX className="inline h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-slate-900">
-                    {c?.contactIsGroup ? <IconUsers className="h-4 w-4 shrink-0" /> : null}
-                    <span className="truncate">{c?.contactName || c?.contactPhone}</span>
-                    {c?.contactIsGroup ? (
-                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                        Grupo
-                      </span>
-                    ) : null}
-                    <button
-                      onClick={() => {
-                        setNameDraft(c?.contactName ?? "");
-                        setEditingName(true);
-                      }}
-                      title="Renomear contato"
-                      className="text-xs text-slate-400 transition-colors hover:text-sky-600"
-                    >
-                      <IconPencil className="inline h-3.5 w-3.5" />
-                    </button>
-                  </p>
-                )}
-                <p className="truncate text-xs text-slate-500">
-                  {c?.contactIsGroup ? "grupo" : formatPhone(c?.contactPhone ?? "")} · {c?.numberLabel}
-                  {c?.sectorName ? ` · ${c.sectorName}` : ""}
-                  {c?.assignedUserName ? ` · Atendente: ${c.assignedUserName}` : ""}
-                </p>
-                {/* etiquetas do contato (Chatwoot-like) */}
-                <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  {(c?.contactTags ?? []).map((t) => (
-                    <span
-                      key={t.id}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        TAG_CHIP[t.color] ?? TAG_CHIP.slate
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${TAG_DOT[t.color] ?? TAG_DOT.slate}`} />
-                      {t.name}
+            {/* cabecalho: limpo e focado na acao imediata */}
+            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelected(null);
+                    setDetailsOpen(false);
+                  }}
+                  title="Voltar para a lista"
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 lg:hidden"
+                >
+                  ←
+                </button>
+                <div className="min-w-0">
+                  {editingName ? (
+                    <div className="flex items-center gap-1">
+                      <input
+                        value={nameDraft}
+                        onChange={(e) => setNameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void saveContactName(nameDraft.trim() || null);
+                          if (e.key === "Escape") setEditingName(false);
+                        }}
+                        maxLength={120}
+                        autoFocus
+                        className="w-56 rounded-md border border-sky-400 px-2 py-1 text-sm focus:outline-none"
+                        placeholder="Nome do contato"
+                      />
                       <button
-                        onClick={() => void removeContactTag(t.id)}
-                        title="Remover etiqueta"
-                        className="opacity-60 transition-opacity hover:opacity-100"
+                        onClick={() => void saveContactName(nameDraft.trim() || null)}
+                        className="rounded-md bg-sky-600 px-2 py-1 text-xs font-semibold text-white hover:bg-sky-700"
                       >
-                        <IconX className="inline h-3 w-3" />
+                        Ok
                       </button>
-                    </span>
-                  ))}
-                  {tagEditing ? (
-                    <>
-                    <input
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void addContactTag(tagInput);
-                        if (e.key === "Escape") setTagEditing(false);
-                      }}
-                      maxLength={40}
-                      autoFocus
-                      list="tag-options"
-                      placeholder="Nova etiqueta + Enter"
-                      className="w-40 rounded-md border border-sky-400 px-2 py-0.5 text-xs focus:outline-none"
-                    />
-                    <datalist id="tag-options">
-                      {tagOptions.map((t) => (
-                        <option key={t.id} value={t.name} />
-                      ))}
-                    </datalist>
-                    </>
+                      <button
+                        onClick={() => setEditingName(false)}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600"
+                      >
+                        <IconX className="inline h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ) : (
-                    <button
-                      onClick={() => {
-                        setTagInput("");
-                        setTagEditing(true);
-                      }}
-                      title="Adicionar etiqueta ao contato"
-                      className="rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-400 hover:border-sky-400 hover:text-sky-600"
-                    >
-                      ＋ etiqueta
-                    </button>
+                    <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-slate-900">
+                      {c?.contactIsGroup ? <IconUsers className="h-4 w-4 shrink-0" /> : null}
+                      <span className="truncate">{c?.contactName || c?.contactPhone}</span>
+                      {c?.contactIsGroup ? (
+                        <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                          Grupo
+                        </span>
+                      ) : null}
+                      <button
+                        onClick={() => {
+                          setNameDraft(c?.contactName ?? "");
+                          setEditingName(true);
+                        }}
+                        title="Renomear contato"
+                        className="text-xs text-slate-400 transition-colors hover:text-sky-600"
+                      >
+                        <IconPencil className="inline h-3.5 w-3.5" />
+                      </button>
+                    </p>
                   )}
+                  <p className="truncate text-xs text-slate-500">
+                    {c?.contactIsGroup ? "grupo" : formatPhone(c?.contactPhone ?? "")} · {c?.numberLabel}
+                    {c?.sectorName ? ` · ${c.sectorName}` : ""}
+                  </p>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {me?.role === "ADMIN" && (
-                  <select
-                    value={c?.sectorId ?? ""}
-                    onChange={(e) => void moveToSector(e.target.value || null)}
-                    disabled={movingSector}
-                    className="rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
-                    title="Transferir para setor"
-                  >
-                    <option value="">Sem setor (empresa)</option>
-                    {sectorsList.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
                 <select
                   value={c?.assignedUserId ?? ""}
                   onChange={(e) => void assignTo(e.target.value || null)}
                   disabled={c?.status === "CLOSED"}
-                  className="rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                  className="hidden rounded-md border border-slate-200 px-2 py-1.5 text-xs text-slate-600 focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400 sm:block"
                   title="Transferir para atendente"
                 >
                   <option value="">Sem atendente</option>
@@ -1151,22 +1221,185 @@ export default function InboxClient() {
                     Encerrar conversa
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen((o) => !o)}
+                  title="Detalhes, setor e etiquetas"
+                  className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold ${
+                    detailsOpen
+                      ? "border-sky-400 bg-sky-50 text-sky-700"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  Detalhes
+                  {(c?.contactTags?.length ?? 0) > 0 ? (
+                    <span className="ml-1 rounded-full bg-slate-200 px-1.5 text-[10px] text-slate-700">
+                      {c?.contactTags?.length}
+                    </span>
+                  ) : null}
+                </button>
               </div>
             </div>
 
-            <div
-              ref={scrollRef}
-              onScroll={handleScroll}
-              className="min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto bg-slate-50 p-5 chat-scroll"
-            >
-              <MessageList
-                messages={selected.messages}
-                onReact={reactToMessage}
-                onOpenImage={setViewerSrc}
-                onDelete={deleteForAll}
-                onReply={startReply}
-              />
-              <div ref={bottomRef} />
+            {c?.status === "PENDING" && (
+              <div className="flex items-center justify-between border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-800">
+                <span>Conversa pendente — aguardando atendimento.</span>
+                <button
+                  type="button"
+                  onClick={() => void act("take")}
+                  className="font-semibold text-emerald-700 hover:underline"
+                >
+                  Assumir agora
+                </button>
+              </div>
+            )}
+
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div className="relative flex min-w-0 flex-1 flex-col">
+                <div
+                  ref={scrollRef}
+                  onScroll={handleScroll}
+                  className="min-w-0 flex-1 space-y-2 overflow-x-hidden overflow-y-auto bg-slate-50 p-5 chat-scroll"
+                >
+                  <MessageList
+                    messages={selected.messages}
+                    onReact={reactToMessage}
+                    onOpenImage={setViewerSrc}
+                    onDelete={deleteForAll}
+                    onReply={startReply}
+                  />
+                  <div ref={bottomRef} />
+                </div>
+                {showScrollBottom && (
+                  <button
+                    type="button"
+                    onClick={() => scrollToBottom(true)}
+                    title="Ir para o fim da conversa"
+                    className="absolute bottom-3 right-4 z-10 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-md hover:bg-slate-50"
+                  >
+                    ↓ Ir para o fim
+                  </button>
+                )}
+              </div>
+
+              {/* painel lateral retratil: detalhes, setor e etiquetas */}
+              {detailsOpen && (
+                <aside className="w-72 shrink-0 overflow-y-auto border-l border-slate-100 bg-slate-50/60 p-4 space-y-4">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Contato
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-slate-800">
+                      {c?.contactName || c?.contactPhone}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {c?.contactIsGroup ? "Grupo" : formatPhone(c?.contactPhone ?? "")}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">Canal: {c?.numberLabel}</p>
+                  </div>
+
+                  <div className="border-t border-slate-200 pt-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Atendimento
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      <div>
+                        <label className="block text-xs text-slate-500">Atendente</label>
+                        <select
+                          value={c?.assignedUserId ?? ""}
+                          onChange={(e) => void assignTo(e.target.value || null)}
+                          disabled={c?.status === "CLOSED"}
+                          className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-100"
+                        >
+                          <option value="">Sem atendente</option>
+                          {usersList.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {me?.role === "ADMIN" && (
+                        <div>
+                          <label className="block text-xs text-slate-500">Setor</label>
+                          <select
+                            value={c?.sectorId ?? ""}
+                            onChange={(e) => void moveToSector(e.target.value || null)}
+                            disabled={movingSector}
+                            className="mt-1 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 focus:border-sky-500 focus:outline-none disabled:bg-slate-100"
+                          >
+                            <option value="">Sem setor (empresa)</option>
+                            {sectorsList.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-200 pt-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Etiquetas
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      {(c?.contactTags ?? []).map((t) => (
+                        <span
+                          key={t.id}
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            TAG_CHIP[t.color] ?? TAG_CHIP.slate
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 rounded-full ${TAG_DOT[t.color] ?? TAG_DOT.slate}`} />
+                          {t.name}
+                          <button
+                            onClick={() => void removeContactTag(t.id)}
+                            title="Remover etiqueta"
+                            className="opacity-60 transition-opacity hover:opacity-100"
+                          >
+                            <IconX className="inline h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                      {tagEditing ? (
+                        <>
+                          <input
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void addContactTag(tagInput);
+                              if (e.key === "Escape") setTagEditing(false);
+                            }}
+                            maxLength={40}
+                            autoFocus
+                            list="tag-options"
+                            placeholder="Nova etiqueta + Enter"
+                            className="w-full rounded-md border border-sky-400 bg-white px-2 py-1 text-xs focus:outline-none"
+                          />
+                          <datalist id="tag-options">
+                            {tagOptions.map((t) => (
+                              <option key={t.id} value={t.name} />
+                            ))}
+                          </datalist>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setTagInput("");
+                            setTagEditing(true);
+                          }}
+                          title="Adicionar etiqueta ao contato"
+                          className="rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-400 hover:border-sky-400 hover:text-sky-600"
+                        >
+                          ＋ etiqueta
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </aside>
+              )}
             </div>
 
             <div className="relative border-t border-slate-100 bg-white">
