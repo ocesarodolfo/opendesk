@@ -33,7 +33,9 @@ export default async function NumbersPage() {
       <p className="mt-1 text-sm text-slate-500">
         Cadastre os números da empresa, vincule-os a um setor e conecte-os via QR Code.
       </p>
-      <NumbersClient initialNumbers={numbersDto} sectors={sectorsDto} isAdmin={session.role === "ADMIN"} />
+      <div className="mt-6">
+        <NumbersClient initialNumbers={numbersDto} sectors={sectorsDto} isAdmin={session.role === "ADMIN"} />
+      </div>
     </div>
   );
 }

@@ -857,7 +857,7 @@ export default function InboxClient() {
   });
 
   return (
-    <div className="grid h-[calc(100vh-4rem)] min-w-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
+    <div className="grid h-[calc(100dvh-5.5rem)] min-w-0 grid-cols-1 gap-4 overflow-hidden sm:h-[calc(100dvh-6.5rem)] md:h-[calc(100dvh-4rem)] lg:grid-cols-[360px_minmax(0,1fr)]">
       {/* ---- lista de conversas ---- */}
       <div
         className={`${
@@ -1254,7 +1254,7 @@ export default function InboxClient() {
               </div>
             )}
 
-            <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="relative flex min-h-0 flex-1 overflow-hidden">
               <div className="relative flex min-w-0 flex-1 flex-col">
                 <div
                   ref={scrollRef}
@@ -1284,7 +1284,7 @@ export default function InboxClient() {
 
               {/* painel lateral retratil: detalhes, setor e etiquetas */}
               {detailsOpen && (
-                <aside className="w-72 shrink-0 overflow-y-auto border-l border-slate-100 bg-slate-50/60 p-4 space-y-4">
+                <aside className="absolute inset-y-0 right-0 z-20 w-72 max-w-[85vw] shrink-0 overflow-y-auto border-l border-slate-200 bg-slate-50 p-4 space-y-4 shadow-lg md:static md:border-slate-100 md:bg-slate-50/60 md:shadow-none">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                       Contato

@@ -9,17 +9,24 @@ export type SidebarNavItem = {
   label: string;
 };
 
-export default function SidebarNav({ items }: { items: SidebarNavItem[] }) {
+export default function SidebarNav({
+  items,
+  onNavigate,
+}: {
+  items: SidebarNavItem[];
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
 
   return (
-    <nav className="flex-1 space-y-1 px-3">
+    <nav className="flex-1 space-y-1 overflow-y-auto px-3">
       {items.map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (
           <Link
             key={item.href}
             href={item.href}
+            onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={`flex items-center justify-between rounded-md px-3 py-2 text-sm transition-colors ${
               active
