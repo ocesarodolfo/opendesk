@@ -204,19 +204,6 @@ export default function UserMenu({ name, role }: { name: string; role: string })
           </div>
 
           <div className="border-t border-slate-200 py-1">
-            {role === "ADMIN" ? (
-              <Link
-                href="/usuarios"
-                role="menuitem"
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-2 rounded-md mx-1 px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-              >
-                <span aria-hidden className="w-5 shrink-0 text-center">
-                  <IconUser className="inline h-4 w-4" />
-                </span>
-                <span className="min-w-0 flex-1 truncate">Gerenciar usuários</span>
-              </Link>
-            ) : null}
             <Link
               href="/conta"
               role="menuitem"
