@@ -12,6 +12,7 @@ const NAV = [
   { href: "/setores", label: "Setores", adminOnly: true },
   { href: "/respostas", label: "Respostas rápidas", adminOnly: true },
   { href: "/usuarios", label: "Usuários", adminOnly: true },
+  { href: "/auditoria", label: "Auditoria", adminOnly: true },
 ];
 
 export default async function AppLayout({
