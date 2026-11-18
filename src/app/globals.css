@@ -34,41 +34,54 @@
 }
 
 /* ---------------------------------------------------------------------
-   DARK MODE (seletor no menu: claro/escuro/sistema)
-   Decision: instead of rewriting "dark:" per screen, we override the
-   main utility classes under `html.dark`. Invert surfaces, borders and
-   text in a neutral palette (slate); colored chips remain as-is.
+   PALETA OZONTECK + WHATSAPP & DARK MODE
+   - Ozonteck (institucional/acoes): Azul tecnologico (#0284c7 / #0369a1)
+   - WhatsApp (chat/status): Verde (#00a884 / #005c4b) + neutro escuro (#0b141a / #111b21 / #202c33)
+   - Contraste: todos os niveis de texto atendem WCAG AA (>= 4.5:1)
    --------------------------------------------------------------------- */
+:root {
+  --brand-ozon: #0284c7;
+  --brand-ozon-hover: #0369a1;
+  --brand-wa: #00a884;
+  --brand-wa-deep: #005c4b;
+  --surface-canvas: #f1f5f9;
+  --surface-card: #ffffff;
+  --surface-subtle: #f8fafc;
+}
 html.dark {
   color-scheme: dark;
+  --surface-canvas: #0b141a;
+  --surface-card: #111b21;
+  --surface-subtle: #1a242c;
 }
 html.dark body {
-  background-color: #12151d;
-  color: #e5e7eb;
+  background-color: #0b141a;
+  color: #e9edef;
 }
 /* superficies */
-html.dark .bg-slate-100 { background-color: #12151d; }
-html.dark .bg-slate-50  { background-color: #1a1f2b; }
-html.dark .bg-white     { background-color: #1c202b; }
-html.dark .bg-slate-200 { background-color: #2a3145; } /* bubble receive / tabs */
-/* texto */
-html.dark .text-slate-900 { color: #f1f5f9; }
-html.dark .text-slate-800 { color: #e2e8f0; }
-html.dark .text-slate-700 { color: #d4d9e2; }
-html.dark .text-slate-600 { color: #a7b0bf; }
-html.dark .text-slate-500 { color: #949eae; }
-html.dark .text-slate-400 { color: #798395; }
+html.dark .bg-slate-100 { background-color: #0b141a; }
+html.dark .bg-slate-50  { background-color: #1a242c; }
+html.dark .bg-white     { background-color: #111b21; }
+html.dark .bg-white\/85 { background-color: rgb(17 27 33 / 0.88); }
+html.dark .bg-slate-200 { background-color: #202c33; } /* bubble receive / tabs */
+/* texto (contraste AA >= 4.5:1 sobre #111b21 e #0b141a) */
+html.dark .text-slate-900 { color: #e9edef; }
+html.dark .text-slate-800 { color: #d1d7db; }
+html.dark .text-slate-700 { color: #c4ccd2; }
+html.dark .text-slate-600 { color: #aebac1; }
+html.dark .text-slate-500 { color: #9aa7b0; }
+html.dark .text-slate-400 { color: #8696a0; }
 /* bordas */
-html.dark .border-slate-200 { border-color: #2c3242; }
-html.dark .border-slate-100 { border-color: #232837; }
-html.dark .border-slate-300 { border-color: #3a4155; }
+html.dark .border-slate-200 { border-color: #2a3942; }
+html.dark .border-slate-100 { border-color: #222e35; }
+html.dark .border-slate-300 { border-color: #374854; }
 /* hover/hover-compound */
-html.dark .hover\:bg-slate-50:hover { background-color: #232837; }
-html.dark .hover\:bg-slate-100:hover { background-color: #232837; }
-html.dark .hover\:text-slate-900:hover { color: #f1f5f9; }
+html.dark .hover\:bg-slate-50:hover { background-color: #1f2c34; }
+html.dark .hover\:bg-slate-100:hover { background-color: #202c33; }
+html.dark .hover\:text-slate-900:hover { color: #e9edef; }
 /* cepilha o scroll no escuro */
 html.dark .chat-scroll::-webkit-scrollbar-thumb {
-  background-color: #3a4155;
+  background-color: #374854;
 }
 /* ALERTAS FLUTUANTES (toasts) */
 .toast-info {
@@ -171,27 +184,27 @@ html.dark .bg-sky-100\/70 {
 html.dark input,
 html.dark textarea,
 html.dark select {
-  background-color: #161a24;
-  color: #e2e8f0;
-  border-color: #3a4155;
+  background-color: #162027;
+  color: #e9edef;
+  border-color: #374854;
 }
 html.dark input::placeholder,
 html.dark textarea::placeholder {
-  color: #6b7280;
+  color: #8696a0;
 }
 html.dark input:disabled,
 html.dark textarea:disabled,
 html.dark select:disabled,
 html.dark .disabled\:bg-slate-100:disabled {
-  background-color: #12151d;
-  color: #64748b;
-  border-color: #232837;
+  background-color: #0b141a;
+  color: #8696a0;
+  border-color: #222e35;
 }
 html.dark .disabled\:text-slate-400:disabled {
-  color: #64748b;
+  color: #8696a0;
 }
 html.dark .bg-slate-50\/60 {
-  background-color: #181d28;
+  background-color: #162027;
 }
 html.dark .bg-amber-50 {
   background-color: #2b2112;
@@ -203,10 +216,10 @@ html.dark .text-amber-800 {
   color: #fcd34d;
 }
 html.dark .bg-emerald-50 {
-  background-color: #0e2a22;
+  background-color: #0c2b23;
 }
 html.dark .hover\:bg-emerald-100:hover {
-  background-color: #143b30;
+  background-color: #133e32;
 }
 html.dark .bg-rose-50,
 html.dark .hover\:bg-rose-50:hover {
@@ -215,7 +228,20 @@ html.dark .hover\:bg-rose-50:hover {
 html.dark .border-rose-200 {
   border-color: #6b2636;
 }
+html.dark .text-sky-600 {
+  color: #53bdeb;
+}
 html.dark .text-sky-700 {
   color: #7dd3fc;
 }
+/* badges semanticas no tema escuro (mantendo alto contraste) */
+html.dark .bg-emerald-100 { background-color: #0c3329; }
+html.dark .text-emerald-700 { color: #6ee7b7; }
+html.dark .bg-amber-100 { background-color: #33250c; }
+html.dark .text-amber-700 { color: #fcd34d; }
+html.dark .bg-sky-100 { background-color: #0f2942; }
+html.dark .bg-rose-100 { background-color: #38141e; }
+html.dark .text-rose-700 { color: #fda4af; }
+html.dark .bg-violet-100 { background-color: #2b1d47; }
+html.dark .text-violet-700 { color: #c4b5fd; }
 
