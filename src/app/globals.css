@@ -167,3 +167,55 @@ html.dark .bg-sky-100\/70 {
 }
 /* menu lateral ja e escuro: mantem neutro */
 
+/* formularios e campos desabilitados no tema escuro */
+html.dark input,
+html.dark textarea,
+html.dark select {
+  background-color: #161a24;
+  color: #e2e8f0;
+  border-color: #3a4155;
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #6b7280;
+}
+html.dark input:disabled,
+html.dark textarea:disabled,
+html.dark select:disabled,
+html.dark .disabled\:bg-slate-100:disabled {
+  background-color: #12151d;
+  color: #64748b;
+  border-color: #232837;
+}
+html.dark .disabled\:text-slate-400:disabled {
+  color: #64748b;
+}
+html.dark .bg-slate-50\/60 {
+  background-color: #181d28;
+}
+html.dark .bg-amber-50 {
+  background-color: #2b2112;
+}
+html.dark .border-amber-200 {
+  border-color: #5c4319;
+}
+html.dark .text-amber-800 {
+  color: #fcd34d;
+}
+html.dark .bg-emerald-50 {
+  background-color: #0e2a22;
+}
+html.dark .hover\:bg-emerald-100:hover {
+  background-color: #143b30;
+}
+html.dark .bg-rose-50,
+html.dark .hover\:bg-rose-50:hover {
+  background-color: #2e151d;
+}
+html.dark .border-rose-200 {
+  border-color: #6b2636;
+}
+html.dark .text-sky-700 {
+  color: #7dd3fc;
+}
+
