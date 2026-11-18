@@ -267,6 +267,13 @@ export default function InboxClient() {
       } catch {
         /* sem espaco: ignora */
       }
+    } else if (res.status === 404) {
+      try {
+        localStorage.removeItem(`atende_detail_cache:${id}`);
+      } catch {
+        /* ignora */
+      }
+      setSelected(null);
     } else if (!opts?.cache) {
       setSelected(null); // sem cache: mostra o vazio (pane detalhe vira skeleton)
     }
@@ -561,9 +568,9 @@ export default function InboxClient() {
     }
   }
 
-  async function act(action: "take" | "close") {
+  async function act(action: "take" | "close" | "reopen") {
     if (!selected) return;
-    const status = action === "take" ? "OPEN" : "CLOSED";
+    const status = action === "close" ? "CLOSED" : "OPEN";
     const res = await fetch(`/api/conversations/${selected.conversation.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -572,6 +579,31 @@ export default function InboxClient() {
     if (res.ok) {
       await loadDetail(selected.conversation.id);
       await loadList();
+    } else {
+      const data = await res.json().catch(() => null);
+      showToast(data?.error ?? "Nao foi possivel atualizar a conversa.", "erro");
+    }
+  }
+
+  async function deleteConversation() {
+    if (!selected) return;
+    const label = selected.conversation.contactName || selected.conversation.contactPhone;
+    if (!confirm(`Excluir a conversa com "${label}" e todo o histórico de mensagens?`)) return;
+    const id = selected.conversation.id;
+    const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      try {
+        localStorage.removeItem(`atende_detail_cache:${id}`);
+      } catch {
+        /* ignora */
+      }
+      setSelected(null);
+      setDetailsOpen(false);
+      showToast("Conversa excluída.", "sucesso");
+      await loadList();
+    } else {
+      const data = await res.json().catch(() => null);
+      showToast(data?.error ?? "Nao foi possivel excluir a conversa.", "erro");
     }
   }
 
@@ -1221,6 +1253,22 @@ export default function InboxClient() {
                     Encerrar conversa
                   </button>
                 )}
+                {c?.status === "CLOSED" && (
+                  <button
+                    onClick={() => void act("reopen")}
+                    className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+                  >
+                    Reabrir conversa
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void deleteConversation()}
+                  title="Excluir conversa e histórico"
+                  className="rounded-md border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                >
+                  Excluir
+                </button>
                 <button
                   type="button"
                   onClick={() => setDetailsOpen((o) => !o)}

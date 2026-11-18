@@ -171,3 +171,48 @@ export async function PATCH(
   }
   return NextResponse.json(toConversationDTO(updated));
 }
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Nao autenticado" }, { status: 401 });
+
+  const { id } = await params;
+  const existing = await prisma.conversation.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      sectorId: true,
+      status: true,
+      contact: { select: { name: true, phone: true } },
+    },
+  });
+  if (!existing) return NextResponse.json({ error: "Conversa inexistente." }, { status: 404 });
+
+  const scope = await getSectorScope(session);
+  if (!canViewConversation(scope, existing.sectorId)) {
+    return NextResponse.json({ error: "Sem permissao para esta conversa." }, { status: 403 });
+  }
+
+  await prisma.conversation.delete({ where: { id } });
+
+  emitRealtime({
+    type: "conversation:update",
+    conversationId: id,
+    sectorId: existing.sectorId,
+  });
+
+  void auditLog({
+    action: AUDIT_ACTIONS.CONVERSA_EXCLUIDA,
+    entity: "Conversation",
+    entityId: id,
+    detail: `conversa excluida: ${existing.contact.name ?? existing.contact.phone} (${existing.status})`,
+    session,
+    req,
+    metadata: { status: existing.status, sectorId: existing.sectorId },
+  });
+
+  return NextResponse.json({ ok: true });
+}
