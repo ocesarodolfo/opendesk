@@ -442,6 +442,10 @@ export function MessageBubble({
               <IconForward className="h-3.5 w-3.5 shrink-0" /> Encaminhada
             </p>
           ) : null}
+          {/* grupo: nome do participante que enviou (acima da citacao, igual ao WhatsApp) */}
+          {!isOut && message.senderName ? (
+            <p className="mb-0.5 text-xs font-semibold text-sky-700">{message.senderName}</p>
+          ) : null}
           {/* resposta citando outra mensagem ("responder" do WhatsApp) */}
           {message.quotedSnippet ? (
             <div className={`chat-quote mb-1 ${QUOTE_BOX} ${mediaOnly ? "mx-0.5 mt-0.5" : ""}`}>
@@ -456,10 +460,6 @@ export function MessageBubble({
                 {message.quotedSnippet}
               </p>
             </div>
-          ) : null}
-          {/* grupo: nome do participante que enviou (nao aparece nas suas) */}
-          {!isOut && message.senderName ? (
-            <p className="mb-0.5 text-xs font-semibold text-sky-700">{message.senderName}</p>
           ) : null}
           {body}
           <p
