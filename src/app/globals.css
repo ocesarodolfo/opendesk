@@ -76,8 +76,12 @@ html.dark .border-slate-200 { border-color: #2a3942; }
 html.dark .border-slate-100 { border-color: #222e35; }
 html.dark .border-slate-300 { border-color: #374854; }
 /* hover/hover-compound */
-html.dark .hover\:bg-slate-50:hover { background-color: #1f2c34; }
+html.dark .hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-50\/70:hover { background-color: #1f2c34; }
 html.dark .hover\:bg-slate-100:hover { background-color: #202c33; }
+html.dark .hover\:bg-slate-200:hover { background-color: #2a3942; }
+html.dark .hover\:bg-sky-100\/70:hover { background-color: #1c2c47; }
+html.dark .bg-sky-50\/90 { background-color: rgb(21 34 56 / 0.92); }
 html.dark .hover\:text-slate-900:hover { color: #e9edef; }
 /* cepilha o scroll no escuro */
 html.dark .chat-scroll::-webkit-scrollbar-thumb {

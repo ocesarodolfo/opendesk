@@ -359,6 +359,7 @@ export function MessageBubble({
   } else if (message.mediaUrl) {
     const src = `/api/media/${message.mediaUrl}`;
     if (message.mediaType?.startsWith("image/")) {
+      const isSticker = message.mediaType === "image/webp";
       body = (
         <img
           src={src}
@@ -366,11 +367,21 @@ export function MessageBubble({
           loading="lazy"
           // clique abre o visualizador (zoom + foto em tela cheia)
           onClick={() => onOpenImage?.(src)}
-          className="-mb-1 max-w-[240px] cursor-zoom-in rounded-md hover:opacity-90"
+          className={
+            isSticker
+              ? "h-32 w-32 cursor-zoom-in rounded-md object-contain transition-opacity hover:opacity-90"
+              : "-mb-1 aspect-[4/3] w-[260px] max-w-full cursor-zoom-in rounded-md object-cover transition-opacity hover:opacity-90 sm:w-[300px]"
+          }
         />
       );
     } else if (message.mediaType?.startsWith("video/")) {
-      body = <video src={src} controls className="max-w-[240px] rounded-md" />;
+      body = (
+        <video
+          src={src}
+          controls
+          className="aspect-[4/3] w-[260px] max-w-full rounded-md bg-black object-contain sm:w-[300px]"
+        />
+      );
     } else if (message.mediaType?.startsWith("audio/")) {
       body = <AudioBubblePlayer src={src} />;
     } else {
@@ -660,13 +671,13 @@ function AlbumBubble({
               <IconBan className="h-4 w-4 shrink-0" /> Mensagem apagada para todos
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-0.5">
+            <div className="grid w-[260px] max-w-full grid-cols-2 gap-0.5 sm:w-[300px]">
               {items.map((m, i) => {
                 const src = m.mediaUrl ? `/api/media/${m.mediaUrl}` : null;
                 const isImg = (m.mediaType ?? "").startsWith("image/");
                 if (!isImg || m.deleted || !src) {
                   return (
-                    <div key={m.id} className="flex min-h-[92px] items-center justify-center bg-black/5 p-2">
+                    <div key={m.id} className="flex aspect-square items-center justify-center bg-black/5 p-2">
                       {m.deleted ? (
                         <span className="text-xs italic text-slate-500">apagada</span>
                       ) : isImg && !src ? (
@@ -686,7 +697,7 @@ function AlbumBubble({
                       alt={m.fileName ?? "imagem"}
                       loading="lazy"
                       onClick={() => onOpenImage?.(src)}
-                      className="min-h-[92px] w-full cursor-zoom-in object-cover hover:opacity-90"
+                      className="aspect-square w-full cursor-zoom-in object-cover transition-opacity hover:opacity-90"
                     />
                     {/* acoes do item do album no hover do thumb */}
                     {onReply || onDelete ? (

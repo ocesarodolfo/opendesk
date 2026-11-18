@@ -32,6 +32,7 @@ const ACTION_LABELS: Record<string, string> = {
   CONVERSA_ATRIBUICAO: "Atribuição de conversa",
   CONVERSA_SETOR: "Setor da conversa",
   CONVERSA_LOTE: "Atribuição em lote",
+  CONVERSA_EXCLUIDA: "Exclusão de conversa",
   MENSAGEM_ENVIADA: "Mensagem enviada",
   MIDIA_ENVIADA: "Mídia enviada",
   MENSAGEM_APAGADA: "Mensagem apagada",
