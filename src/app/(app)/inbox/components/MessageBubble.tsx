@@ -767,6 +767,32 @@ function AlbumBubble({
 }
 
 /* =========================================================================
+   SEPARADOR DE DIA (estilo WhatsApp: Hoje / Ontem / dia da semana / data)
+   ========================================================================= */
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDayLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000);
+
+  if (diffDays === 0) return "Hoje";
+  if (diffDays === 1) return "Ontem";
+  if (diffDays > 1 && diffDays < 7) {
+    const weekday = d.toLocaleDateString("pt-BR", { weekday: "long" });
+    return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  }
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" });
+}
+
+/* =========================================================================
    LISTA DE MENSAGENS: agrupa em sequencia as mensagens com mesmo groupKey
    e delega cada bloco a MessageBubble ou AlbumBubble
    ========================================================================= */
@@ -801,22 +827,41 @@ export function MessageList({
   }
   if (current.length) blocks.push(current);
 
+  let lastDay = "";
+
   return (
     <>
-      {blocks.map((b) =>
-        b.length > 1 ? (
-          <AlbumBubble key={`album-${b[0].id}`} items={b} onOpenImage={onOpenImage} onDelete={onDelete} onReply={onReply} />
-        ) : (
-          <MessageBubble
-            key={b[0].id}
-            message={b[0]}
-            onReact={onReact}
-            onOpenImage={onOpenImage}
-            onDelete={onDelete}
-            onReply={onReply}
-          />
-        )
-      )}
+      {blocks.map((b) => {
+        const currentDay = dayKey(b[0].createdAt);
+        const showDateDivider = currentDay !== "" && currentDay !== lastDay;
+        if (currentDay) lastDay = currentDay;
+
+        const bubble =
+          b.length > 1 ? (
+            <AlbumBubble items={b} onOpenImage={onOpenImage} onDelete={onDelete} onReply={onReply} />
+          ) : (
+            <MessageBubble
+              message={b[0]}
+              onReact={onReact}
+              onOpenImage={onOpenImage}
+              onDelete={onDelete}
+              onReply={onReply}
+            />
+          );
+
+        return (
+          <div key={b.length > 1 ? `album-${b[0].id}` : b[0].id} className="space-y-2">
+            {showDateDivider && (
+              <div className="my-3 flex justify-center">
+                <span className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-[11px] font-medium text-slate-600 shadow-sm">
+                  {formatDayLabel(b[0].createdAt)}
+                </span>
+              </div>
+            )}
+            {bubble}
+          </div>
+        );
+      })}
     </>
   );
 }
