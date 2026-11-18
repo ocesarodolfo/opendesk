@@ -202,20 +202,30 @@ export default function InboxClient() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // atalhos globais: Ctrl/Cmd+K foca a busca; Esc fecha painel de detalhes
+  // atalhos globais: Ctrl/Cmd+K foca a busca; Esc fecha paineis abertos ou sai da conversa
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
-      } else if (e.key === "Escape" && detailsOpen) {
-        setDetailsOpen(false);
+      } else if (e.key === "Escape") {
+        if (viewerSrc || deleteOpen || editingName || tagEditing) return;
+        if (repliesOpen) {
+          setRepliesOpen(false);
+        } else if (replyTo) {
+          setReplyTo(null);
+        } else if (detailsOpen) {
+          setDetailsOpen(false);
+        } else if (selected || openingId) {
+          setSelected(null);
+          setOpeningId(null);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailsOpen]);
+  }, [viewerSrc, deleteOpen, editingName, tagEditing, repliesOpen, replyTo, detailsOpen, selected, openingId]);
 
   const loadList = useCallback(async (opts?: { cache?: boolean }) => {
     const params = new URLSearchParams();
