@@ -178,6 +178,9 @@ export async function DELETE(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Nao autenticado" }, { status: 401 });
+  if (session.role !== "ADMIN") {
+    return NextResponse.json({ error: "Apenas administradores excluem conversas." }, { status: 403 });
+  }
 
   const { id } = await params;
   const existing = await prisma.conversation.findUnique({

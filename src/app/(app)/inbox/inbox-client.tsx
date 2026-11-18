@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageBubble, MessageList } from "./components/MessageBubble";
 import { ToastHost, showToast } from "@/components/toast";
+import Modal from "@/components/modal";
 import { getMute, getSound, playSound, SOUND_EVENT, type SoundName } from "@/components/notif-sound";
 import {
   IconCheckboxOn,
@@ -151,6 +152,9 @@ export default function InboxClient() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const draftsRef = useRef<Record<string, string>>({});
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingConv, setDeletingConv] = useState(false);
+
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const pendingFilesRef = useRef(pendingFiles);
@@ -586,24 +590,28 @@ export default function InboxClient() {
   }
 
   async function deleteConversation() {
-    if (!selected) return;
-    const label = selected.conversation.contactName || selected.conversation.contactPhone;
-    if (!confirm(`Excluir a conversa com "${label}" e todo o histórico de mensagens?`)) return;
+    if (!selected || deletingConv) return;
+    setDeletingConv(true);
     const id = selected.conversation.id;
-    const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      try {
-        localStorage.removeItem(`atende_detail_cache:${id}`);
-      } catch {
-        /* ignora */
+    try {
+      const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        try {
+          localStorage.removeItem(`atende_detail_cache:${id}`);
+        } catch {
+          /* ignora */
+        }
+        setDeleteOpen(false);
+        setSelected(null);
+        setDetailsOpen(false);
+        showToast("Conversa excluída.", "sucesso");
+        await loadList();
+      } else {
+        const data = await res.json().catch(() => null);
+        showToast(data?.error ?? "Nao foi possivel excluir a conversa.", "erro");
       }
-      setSelected(null);
-      setDetailsOpen(false);
-      showToast("Conversa excluída.", "sucesso");
-      await loadList();
-    } else {
-      const data = await res.json().catch(() => null);
-      showToast(data?.error ?? "Nao foi possivel excluir a conversa.", "erro");
+    } finally {
+      setDeletingConv(false);
     }
   }
 
@@ -1263,14 +1271,6 @@ export default function InboxClient() {
                 )}
                 <button
                   type="button"
-                  onClick={() => void deleteConversation()}
-                  title="Excluir conversa e histórico"
-                  className="rounded-md border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
-                >
-                  Excluir
-                </button>
-                <button
-                  type="button"
                   onClick={() => setDetailsOpen((o) => !o)}
                   title="Detalhes, setor e etiquetas"
                   className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold ${
@@ -1446,6 +1446,22 @@ export default function InboxClient() {
                       )}
                     </div>
                   </div>
+
+                  {me?.role === "ADMIN" && (
+                    <div className="border-t border-slate-200 pt-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Zona de risco
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteOpen(true)}
+                        title="Excluir conversa e histórico"
+                        className="mt-2 w-full rounded-md border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                      >
+                        Excluir conversa
+                      </button>
+                    </div>
+                  )}
                 </aside>
               )}
             </div>
@@ -1676,6 +1692,40 @@ export default function InboxClient() {
           </>
         )}
       </div>
+      {/* modal de confirmacao para excluir conversa */}
+      <Modal
+        open={deleteOpen}
+        onClose={() => {
+          if (!deletingConv) setDeleteOpen(false);
+        }}
+        title="Excluir conversa"
+      >
+        <p className="text-sm text-slate-600">
+          Deseja excluir a conversa com{" "}
+          <strong className="font-semibold text-slate-900">
+            {c?.contactName || c?.contactPhone}
+          </strong>{" "}
+          e todo o histórico de mensagens? Esta ação não pode ser desfeita.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={deletingConv}
+            onClick={() => setDeleteOpen(false)}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={deletingConv}
+            onClick={() => void deleteConversation()}
+            className="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {deletingConv ? "Excluindo..." : "Excluir conversa"}
+          </button>
+        </div>
+      </Modal>
       {/* visualizador de imagem: tela cheia com zoom + arraste */}
       {viewerSrc ? <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} /> : null}
     </div>
