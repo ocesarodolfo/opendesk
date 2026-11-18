@@ -63,44 +63,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Informe e-mail e senha." }, { status: 400 });
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  // Mensagem generica: nao revela se o e-mail existe
-  if (!user || !user.active) {
-    registerFailure(ip);
-    void auditLog({
-      action: AUDIT_ACTIONS.LOGIN_FALHA,
-      entity: "User",
-      detail: `credenciais invalidas: ${email}`,
-      req,
-    });
-    return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
-  }
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+    // Mensagem generica: nao revela se o e-mail existe
+    if (!user || !user.active) {
+      registerFailure(ip);
+      void auditLog({
+        action: AUDIT_ACTIONS.LOGIN_FALHA,
+        entity: "User",
+        detail: `credenciais invalidas: ${email}`,
+        req,
+      });
+      return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
+    }
 
-  const ok = await verifyPassword(user.passwordHash, password);
-  if (!ok) {
-    registerFailure(ip);
+    const ok = await verifyPassword(user.passwordHash, password);
+    if (!ok) {
+      registerFailure(ip);
+      void auditLog({
+        action: AUDIT_ACTIONS.LOGIN_FALHA,
+        entity: "User",
+        entityId: user.id,
+        detail: `senha incorreta: ${email}`,
+        req,
+      });
+      return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
+    }
+
+    // login ok: limpa contador do IP
+    attempts.delete(ip);
+
     void auditLog({
-      action: AUDIT_ACTIONS.LOGIN_FALHA,
+      action: AUDIT_ACTIONS.LOGIN,
       entity: "User",
       entityId: user.id,
-      detail: `senha incorreta: ${email}`,
+      detail: `login OK: ${email} (${user.role})`,
+      session: { sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" },
       req,
     });
-    return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
+
+    await createSession({ sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("[auth/login] erro ao autenticar:", err);
+    return NextResponse.json(
+      { error: "Erro interno ao autenticar. Verifique os logs do servidor." },
+      { status: 500 }
+    );
   }
-
-  // login ok: limpa contador do IP
-  attempts.delete(ip);
-
-  void auditLog({
-    action: AUDIT_ACTIONS.LOGIN,
-    entity: "User",
-    entityId: user.id,
-    detail: `login OK: ${email} (${user.role})`,
-    session: { sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" },
-    req,
-  });
-
-  await createSession({ sub: user.id, name: user.name, role: user.role === "ADMIN" ? "ADMIN" : "AGENT" });
-  return NextResponse.json({ ok: true });
 }
