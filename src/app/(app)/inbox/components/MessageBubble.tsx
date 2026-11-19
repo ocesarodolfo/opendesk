@@ -10,6 +10,7 @@ import {
   IconForward,
   IconSmile,
 } from "@/components/icons";
+import { AudioBubblePlayer } from "./AudioBubblePlayer";
 
 /* =========================================================================
    TIPOS compartilhados da bolha de mensagem
@@ -61,9 +62,6 @@ export const META_IN = "text-slate-600";
 export const META_FAILED = "font-semibold text-rose-600";
 
 export const QUOTE_BOX = "chat-quote rounded-md border-l-4 border-sky-500 bg-slate-100 px-2 py-1";
-// botao de velocidade (dark tem override em globals.css [.chat-audio-speed])
-const SPEED_BTN =
-  "chat-audio-speed shrink-0 rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-slate-900";
 
 export const REACT_CHIP =
   "chat-react-chip flex items-center gap-0.5 rounded-full border border-slate-300 bg-white px-1.5 py-0.5 text-xs shadow-sm hover:bg-slate-50";
@@ -80,223 +78,6 @@ export const REACT_EXTENDED_OUT = "absolute right-0 mt-1";
 export const REACT_EXTENDED_IN = "absolute left-0 mt-1";
 export const REACT_EXTENDED =
   "chat-react-extended z-30 grid w-72 grid-cols-8 gap-0.5 rounded-lg border border-slate-200 bg-white p-2 shadow-lg";
-
-/* =========================================================================
-   PLAYER DE AUDIO (estilo WhatsApp: pote translucido, botao redondo,
-   barra arrastavel, tempo e velocidade)
-   ========================================================================= */
-
-const SPEED_STEPS = [1, 1.25, 1.5, 2];
-const SPEED_LABEL: Record<number, string> = { 1: "1x", 1.25: "1.25x", 1.5: "1.5x", 2: "2x" };
-
-function fmtTime(s: number): string {
-  if (!Number.isFinite(s) || s < 0) s = 0;
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60).toString().padStart(2, "0");
-  return `${m}:${sec}`;
-}
-
-function AudioBubblePlayer({ src }: { src: string }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [speedIdx, setSpeedIdx] = useState(0);
-  const [scrubbing, setScrubbing] = useState(false);
-  // transcrição em WEB WORKER (whisper-tiny): a inferencia WASM roda fora da
-  // thread principal — a tela NAO trava; modelo baixado pelo cliente no 1o uso
-  const workerRef = useRef<Worker | null>(null);
-  const [transcript, setTranscript] = useState<string | null>(null);
-  const [tState, setTState] = useState<"idle" | "loading" | "error">("idle");
-
-  function transcribe() {
-    if (transcript) {
-      setTranscript(null); // exibir/ocultar
-      return;
-    }
-    setTState("loading");
-    try {
-      // worker reutilizado entre audios; cada novo envio substitui o anterior
-      if (!workerRef.current) {
-        workerRef.current = new Worker(
-          new URL("./transcribe.worker.ts", import.meta.url)
-        );
-        workerRef.current.onmessage = (e: MessageEvent) => {
-          const { ok, text } = (e.data ?? {}) as { ok?: boolean; text?: string };
-          setTState(ok && text ? "idle" : "error");
-          if (ok && text) setTranscript(text);
-        };
-        workerRef.current.onerror = () => setTState("error");
-      }
-      void decodeAndSend(src);
-    } catch {
-      setTState("error");
-    }
-  }
-
-  // AudioContext nao existe em worker: decodifica aqui (thread principal,
-  // rapido) e resamplea p/ 16 kHz mono via OfflineAudioContext
-  async function decodeAndSend(src: string) {
-    try {
-      const ab = await (await fetch(src)).arrayBuffer();
-      const decoded = await new OfflineAudioContext(1, 1, 16000).decodeAudioData(ab);
-      const ch0 = decoded.getChannelData(0);
-      let mono: Float32Array;
-      if (decoded.numberOfChannels > 1) {
-        const ch1 = decoded.getChannelData(1);
-        mono = new Float32Array(ch0.length);
-        for (let i = 0; i < ch0.length; i++) mono[i] = (ch0[i] + ch1[i]) / 2;
-      } else {
-        mono = new Float32Array(ch0); // copia (transferownership no postMessage)
-      }
-      workerRef.current!.postMessage({ audio: mono }, [mono.buffer]);
-    } catch {
-      setTState("error"); // fis fail de decode (formato/codec/)
-    }
-  }
-
-  const progress = duration > 0 ? Math.min(time / duration, 1) : 0;
-
-  function toggle() {
-    const a = audioRef.current;
-    if (!a) return;
-    if (a.paused) void a.play();
-    else a.pause();
-  }
-
-  function setSpeed(idx: number) {
-    const next = (idx + 1) % SPEED_STEPS.length;
-    setSpeedIdx(next);
-    if (audioRef.current) audioRef.current.playbackRate = SPEED_STEPS[next];
-  }
-
-  // pular na barra (clique ou arraste)
-  function seek(e: React.PointerEvent<HTMLDivElement>) {
-    const bar = barRef.current;
-    const a = audioRef.current;
-    if (!bar || !a || !duration) return;
-    const rect = bar.getBoundingClientRect();
-    const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-    a.currentTime = ratio * duration;
-    setTime(a.currentTime);
-  }
-
-  return (
-    <div className="flex w-[260px] flex-col">
-      <div className="chat-audio-player flex items-center gap-2 rounded-full bg-black/[0.05] px-2 py-1.5">
-      <button
-        type="button"
-        onClick={toggle}
-        title={playing ? "Pausar" : "Reproduzir"}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-600 text-white shadow-sm transition-colors hover:bg-green-700"
-      >
-        {playing ? (
-          /* pausa: duas barras */
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-            <rect x="1.5" y="1" width="3" height="10" rx="1" />
-            <rect x="7.5" y="1" width="3" height="10" rx="1" />
-          </svg>
-        ) : (
-          /* play: triangulo */
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-            <path d="M3 1.5c0-.8.9-1.3 1.6-.9l7 4.5c.6.4.6 1.4-.1 1.7l-7 4.5c-.7.4-1.5-.1-1.5-.9v-8.9z" />
-          </svg>
-        )}
-      </button>
-
-      {/* barra de progresso (clique/arraste para pular) */}
-      <div
-        ref={barRef}
-        className="group/bar relative h-4 flex-1 cursor-pointer"
-        onPointerDown={(e) => {
-          seek(e);
-          setScrubbing(true);
-          (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          const move = (ev: PointerEvent) => {
-            const rect = barRef.current!.getBoundingClientRect();
-            const ratio = Math.min(Math.max((ev.clientX - rect.left) / rect.width, 0), 1);
-            if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
-              audioRef.current.currentTime = ratio * audioRef.current.duration;
-              setTime(audioRef.current.currentTime);
-            }
-          };
-          const up = () => {
-            setScrubbing(false);
-            barRef.current?.removeEventListener("pointermove", move);
-            barRef.current?.removeEventListener("pointerup", up);
-            barRef.current?.releasePointerCapture?.(e.pointerId);
-          };
-          barRef.current?.addEventListener("pointermove", move);
-          barRef.current?.addEventListener("pointerup", up);
-        }}
-      >
-        <div className="chat-audio-track absolute top-1/2 h-1.5 w-full -translate-y-1/2 overflow-hidden rounded-full bg-slate-300/70">
-          <div className="h-full rounded-full bg-green-600" style={{ width: `${progress * 100}%` }} />
-        </div>
-        <div
-          className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-green-700 opacity-0 shadow transition-opacity group-hover/bar:opacity-100"
-          style={{ left: `${progress * 100}%`, opacity: scrubbing ? 1 : undefined }}
-        />
-      </div>
-
-      {/* tempo: atual / total */}
-      <span className="shrink-0 text-[11px] tabular-nums text-slate-600">
-        {fmtTime(duration > 0 ? time : 0)}/{duration > 0 ? fmtTime(duration) : "--:--"}
-      </span>
-
-      {/* velocidade: cicla 1x -> 1.25x -> 1.5x -> 2x */}
-      <button
-        type="button"
-        onClick={() => setSpeed(speedIdx)}
-        title="Velocidade de reprodução"
-        className={SPEED_BTN}
-      >
-        {SPEED_LABEL[SPEED_STEPS[speedIdx]]}
-      </button>
-
-      {/* transcrever (Web Worker, local; NAO grava nada no banco) */}
-      <button
-        type="button"
-        onClick={transcribe}
-        title={transcript ? "Ocultar transcrição" : "Transcrever áudio"}
-        disabled={tState === "loading"}
-        className={`${SPEED_BTN} ${tState === "loading" ? "animate-pulse" : ""}`}
-      >
-        {tState === "loading" ? "…" : "Aa"}
-      </button>
-
-      <audio
-        ref={audioRef}
-        src={src}
-        preload="metadata"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => {
-          if (!scrubbing) setTime(e.currentTarget.currentTime);
-        }}
-        onRateChange={(e) => {
-          const i = SPEED_STEPS.indexOf(e.currentTarget.playbackRate);
-          if (i >= 0) setSpeedIdx(i);
-        }}
-      />
-      </div>
-      {/* texto do áudio (abaixo do player) */}
-      {transcript ? (
-        <p className="chat-audio-transcript whitespace-pre-wrap break-words rounded-lg px-1 pt-1 text-xs leading-snug">
-          {transcript}
-        </p>
-      ) : null}
-      {tState === "error" ? (
-        <p className="px-1 pt-1 text-[11px] font-medium text-rose-600">
-          Não foi possível transcrever este áudio.
-        </p>
-      ) : null}
-    </div>
-  );
-}
 
 /* =========================================================================
    BOLHA DE MENSAGEM (midia, texto, citacao, grupo, reacao, info + checks)
@@ -330,7 +111,17 @@ export function MessageBubble({
   onReply?: (message: MessageItem) => void;
 }) {
   const isOut = message.direction === "OUTGOING";
-  const mediaOnly = !!message.mediaUrl && !message.content;
+  const isVisualMedia =
+    !!message.mediaUrl &&
+    !message.deleted &&
+    ((message.mediaType?.startsWith("image/") && message.mediaType !== "image/webp") ||
+      message.mediaType?.startsWith("video/"));
+  const mediaOnly =
+    isVisualMedia &&
+    !message.content &&
+    !message.quotedSnippet &&
+    !message.forwarded &&
+    !(!isOut && message.senderName);
   const [moreOpen, setMoreOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [reactHover, setReactHover] = useState(false);

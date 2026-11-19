@@ -133,19 +133,46 @@ html.dark .chat-bubble-out .chat-quote {
 html.dark .chat-quote {
   background-color: #1e2635;
 }
-/* player de audio dentro da bolha */
-html.dark .chat-audio-player {
-  background-color: rgb(255 255 255 / 8%);
+/* player de audio dentro da bolha (claro e escuro, recebida e enviada) */
+html.dark .chat-audio-play {
+  background-color: #00a884;
+  color: #0b141a;
 }
-html.dark .chat-audio-player .chat-audio-track {
-  background-color: #45576b;
+html.dark .chat-audio-play:hover {
+  background-color: #06cf9c;
 }
-html.dark .chat-audio-speed {
-  background-color: #1d2733;
+html.dark .chat-bubble-out .chat-audio-play {
+  background-color: #06cf9c;
+  color: #0b141a;
 }
-/* texto da transcricao do audio */
-html.dark .chat-audio-transcript {
+html.dark .chat-audio-track {
+  background-color: rgb(255 255 255 / 22%);
+}
+html.dark .chat-audio-fill,
+html.dark .chat-audio-thumb {
+  background-color: #06cf9c;
+}
+html.dark .chat-audio-time {
+  color: #c4ccd2;
+}
+html.dark .chat-audio-btn {
+  background-color: rgb(255 255 255 / 14%);
   color: #e9edef;
+}
+html.dark .chat-audio-btn:hover {
+  background-color: rgb(255 255 255 / 24%);
+}
+html.dark .chat-audio-btn-active,
+html.dark .chat-audio-btn-active:hover {
+  background-color: #53bdeb;
+  color: #0b141a;
+}
+html.dark .chat-audio-transcript {
+  border-color: rgb(255 255 255 / 14%);
+  color: #e9edef;
+}
+html.dark .chat-audio-error {
+  color: #fda4af;
 }
 /* chip de reacao, seletor acima da bolha e bancada de emojis */
 html.dark .chat-react-chip,
