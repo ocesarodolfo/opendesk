@@ -5,6 +5,7 @@ import { toConversationDTO } from "@/lib/dto";
 import { emitRealtime } from "@/lib/realtime";
 import { canChangeSector, canViewConversation, getSectorScope } from "@/lib/scope";
 import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
+import { waManager } from "@/lib/whatsapp/manager";
 
 // include compartilhado (a chamada inline em findUnique reprovava no tsc 5.9)
 const conversationInclude = {
@@ -40,28 +41,40 @@ export async function GET(
     take: 500,
   });
 
+  const rawMapped = messages.map((m) => ({
+    id: m.id,
+    direction: m.direction,
+    content: m.content,
+    status: m.status,
+    mediaUrl: m.mediaUrl,
+    mediaType: m.mediaType,
+    fileName: m.fileName,
+    senderName: m.senderName,
+    quotedSnippet: m.quotedSnippet,
+    quotedSender: m.quotedSender,
+    quotedSenderName: m.quotedSenderName,
+    forwarded: m.forwarded,
+    reaction: m.reaction,
+    reactionMine: m.reactionMine,
+    deleted: m.deleted,
+    groupKey: m.groupKey,
+    externalId: m.externalId,
+    createdAt: m.createdAt.toISOString(),
+  }));
+
+  const finalMessages = conversation.contact.isGroup
+    ? await waManager.resolveStoredGroupMentions(
+        conversation.whatsappNumberId,
+        conversation.contact.jid ?? `${conversation.contact.phone.replace(/\D/g, "")}@g.us`,
+        id,
+        rawMapped,
+        conversation.whatsappNumber.phone
+      )
+    : rawMapped;
+
   return NextResponse.json({
     conversation: toConversationDTO(conversation),
-    messages: messages.map((m) => ({
-      id: m.id,
-      direction: m.direction,
-      content: m.content,
-      status: m.status,
-      mediaUrl: m.mediaUrl,
-      mediaType: m.mediaType,
-      fileName: m.fileName,
-      senderName: m.senderName,
-      quotedSnippet: m.quotedSnippet,
-      quotedSender: m.quotedSender,
-      quotedSenderName: m.quotedSenderName,
-      forwarded: m.forwarded,
-      reaction: m.reaction,
-      reactionMine: m.reactionMine,
-      deleted: m.deleted,
-      groupKey: m.groupKey,
-      externalId: m.externalId,
-      createdAt: m.createdAt.toISOString(),
-    })),
+    messages: finalMessages,
   });
 }
 

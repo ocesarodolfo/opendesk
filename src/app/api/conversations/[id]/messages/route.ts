@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
-import { waManager } from "@/lib/whatsapp/manager";
+import { waManager, buildWireMentionText, type OutgoingMentionInput } from "@/lib/whatsapp/manager";
 import { emitRealtime } from "@/lib/realtime";
 import { canViewConversation, getSectorScope } from "@/lib/scope";
 import { auditLog, AUDIT_ACTIONS } from "@/lib/audit";
@@ -110,16 +110,34 @@ export async function POST(
     return NextResponse.json({ error: "Sem permissao para esta conversa." }, { status: 403 });
   }
 
+  const validMentions: OutgoingMentionInput[] = Array.isArray(body.mentions)
+    ? body.mentions.filter(
+        (m: unknown): m is OutgoingMentionInput =>
+          Boolean(
+            m &&
+              typeof m === "object" &&
+              typeof (m as OutgoingMentionInput).jid === "string" &&
+              typeof (m as OutgoingMentionInput).displayName === "string"
+          )
+      )
+    : [];
+
   try {
     // prefixo do atendente em LINHA PROPRIA (a mensagem desce para a 2a linha)
     const prefix = conversation.whatsappNumber.prefixAgent
       ? `[${session.name}]\n`
       : "";
+    const { wireText, mentionedJids } =
+      conversation.contact.isGroup && validMentions.length > 0
+        ? buildWireMentionText(text, validMentions)
+        : { wireText: text, mentionedJids: [] };
+
     const { externalId } = await waManager.sendMessage(
       conversation.whatsappNumberId,
       conversation.contact.phone,
-      `${prefix}${text}`,
-      conversation.contact.jid
+      `${prefix}${wireText}`,
+      conversation.contact.jid,
+      mentionedJids.length > 0 ? mentionedJids : undefined
     );
 
     const message = await prisma.message.create({

@@ -271,8 +271,40 @@ html.dark .text-emerald-700 { color: #6ee7b7; }
 html.dark .bg-amber-100 { background-color: #33250c; }
 html.dark .text-amber-700 { color: #fcd34d; }
 html.dark .bg-sky-100 { background-color: #0f2942; }
+html.dark .hover\:bg-sky-50:hover { background-color: #152238; }
+html.dark .border-sky-200 { border-color: #1e4976; }
 html.dark .bg-rose-100 { background-color: #38141e; }
 html.dark .text-rose-700 { color: #fda4af; }
 html.dark .bg-violet-100 { background-color: #2b1d47; }
 html.dark .text-violet-700 { color: #c4b5fd; }
+
+/* mencoes (@Nome) dentro das bolhas e citacoes: contraste >= 4.5:1 nos dois temas */
+.chat-bubble-in .chat-mention {
+  background-color: #e0f2fe;
+  color: #0369a1;
+}
+.chat-bubble-out .chat-mention {
+  background-color: #bbf7d0;
+  color: #065f46;
+}
+.chat-quote .chat-mention {
+  background-color: #e0f2fe;
+  color: #0369a1;
+}
+html.dark .chat-bubble-in .chat-mention {
+  background-color: rgb(56 189 248 / 0.16);
+  color: #7dd3fc;
+}
+html.dark .chat-bubble-out .chat-mention {
+  background-color: rgb(16 185 129 / 0.22);
+  color: #a7f3d0;
+}
+html.dark .chat-bubble-in .chat-quote .chat-mention {
+  background-color: rgb(56 189 248 / 0.2);
+  color: #7dd3fc;
+}
+html.dark .chat-bubble-out .chat-quote .chat-mention {
+  background-color: rgb(16 185 129 / 0.24);
+  color: #a7f3d0;
+}
 

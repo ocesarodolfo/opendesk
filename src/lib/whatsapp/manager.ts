@@ -7,6 +7,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   downloadMediaMessage,
+  normalizeMessageContent,
   Browsers,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
@@ -61,9 +62,69 @@ type QuotedInfo = {
   // digitos normalizados do jid do autor (p/ casar com mensagens anteriores
   // da mesma conversa e resolver o nome de quem falou)
   senderJidDigits: string | null;
+  // jids mencionados dentro da propria mensagem citada
+  quotedMentionedJids: string[];
 };
 
 type IncomingMedia = { mime: string; caption: string; fileName: string };
+
+export type GroupMemberDTO = {
+  jid: string;
+  phoneJid: string | null;
+  lid: string | null;
+  phone: string | null;
+  name: string;
+  role: "superadmin" | "admin" | "member";
+  isSelf: boolean;
+};
+
+export type GroupInfoDTO = {
+  subject: string | null;
+  description: string | null;
+  size: number;
+  addressingMode: "lid" | "pn" | null;
+  connected: boolean;
+  fallbackFromHistory: boolean;
+  members: GroupMemberDTO[];
+};
+
+export type OutgoingMentionInput = {
+  jid: string;
+  displayName: string;
+};
+
+type GroupParticipantLite = {
+  id: string;
+  jid?: string;
+  lid?: string;
+  admin?: "admin" | "superadmin" | null;
+  name?: string;
+  notify?: string;
+  verifiedName?: string;
+};
+
+type GroupMetaLite = {
+  id: string;
+  addressingMode?: "lid" | "pn";
+  subject?: string;
+  desc?: string;
+  owner?: string;
+  ownerJid?: string;
+  size?: number;
+  participants: GroupParticipantLite[];
+};
+
+type CachedWaContact = {
+  name?: string;
+  notify?: string;
+  verifiedName?: string;
+  jid?: string;
+  lid?: string;
+};
+
+const GROUP_META_TTL_MS = 5 * 60 * 1000;
+const RAW_MENTION_TEST_RE = /(?<![\w.+-])@\d{10,20}(?!\d)/;
+const RAW_MENTION_FIND_RE = /(?<![\w.+-])@(\d{10,20})(?!\d)/g;
 
 type ManagedSession = {
   socket: ReturnType<typeof makeWASocket>;
@@ -73,6 +134,10 @@ type ManagedSession = {
   // mensagens enviadas pelo celular, que chegam com remoteJid = nos mesmos)
   selfPnDigits?: string | null;
   selfLidDigits?: string | null;
+  groupMetaCache: Map<string, { meta: GroupMetaLite; fetchedAt: number }>;
+  contactCache: Map<string, CachedWaContact>;
+  lidToPn: Map<string, string>;
+  pnToLid: Map<string, string>;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   stopping?: boolean;
 };
@@ -103,6 +168,132 @@ function normalizeJid(jid: string): string | null {
   const [user = "", server = ""] = jid.split("@");
   if (!user || !server) return null;
   return `${user.split(":")[0]}@${server}`;
+}
+
+function jidDigits(jid?: string | null): string {
+  if (!jid) return "";
+  return digitsOnly(jid.split("@")[0].split(":")[0]);
+}
+
+function isPhoneJid(jid?: string | null): boolean {
+  return typeof jid === "string" && jid.endsWith("@s.whatsapp.net");
+}
+
+function isLidJid(jid?: string | null): boolean {
+  return typeof jid === "string" && jid.endsWith("@lid");
+}
+
+function formatPhoneDisplay(d: string): string {
+  if (d.length === 13) return `+${d.slice(0, 2)} (${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
+  if (d.length === 12) return `+${d.slice(0, 2)} (${d.slice(2, 4)}) ${d.slice(4, 8)}-${d.slice(8)}`;
+  return `+${d}`;
+}
+
+function isHumanName(v?: string | null): boolean {
+  const trimmed = v?.trim() ?? "";
+  if (!trimmed) return false;
+  return !/^\+?\d[\d\s()-]*$/.test(trimmed);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function recordContactInfo(
+  session: ManagedSession | undefined,
+  info: {
+    id?: string | null;
+    jid?: string | null;
+    lid?: string | null;
+    name?: string | null;
+    notify?: string | null;
+    verifiedName?: string | null;
+  }
+): void {
+  if (!session) return;
+  const pnJid = isPhoneJid(info.jid)
+    ? normalizeJid(info.jid!)
+    : isPhoneJid(info.id)
+      ? normalizeJid(info.id!)
+      : null;
+  const lidJid = isLidJid(info.lid)
+    ? normalizeJid(info.lid!)
+    : isLidJid(info.id)
+      ? normalizeJid(info.id!)
+      : null;
+
+  const pnDigits = jidDigits(pnJid);
+  const lidDigits = jidDigits(lidJid);
+
+  if (lidDigits && pnDigits) {
+    session.lidToPn.set(lidDigits, pnDigits);
+    session.pnToLid.set(pnDigits, lidDigits);
+  }
+
+  const keys = [pnDigits, lidDigits].filter(Boolean);
+  if (keys.length === 0) return;
+
+  for (const key of keys) {
+    const prev = session.contactCache.get(key) ?? {};
+    const next: CachedWaContact = {
+      name: isHumanName(info.name) ? info.name!.trim() : prev.name,
+      notify: isHumanName(info.notify) ? info.notify!.trim() : prev.notify,
+      verifiedName: isHumanName(info.verifiedName) ? info.verifiedName!.trim() : prev.verifiedName,
+      jid: pnJid ?? prev.jid,
+      lid: lidJid ?? prev.lid,
+    };
+    session.contactCache.set(key, next);
+  }
+}
+
+/**
+ * Converte mencoes "@Nome" digitadas pelo atendente no formato wire do WhatsApp
+ * ("@<digitos_do_jid>") e devolve a lista de JIDs para `contextInfo.mentionedJid`.
+ */
+export function buildWireMentionText(
+  displayText: string,
+  mentions: OutgoingMentionInput[]
+): { wireText: string; mentionedJids: string[] } {
+  if (!displayText || !mentions?.length) {
+    return { wireText: displayText, mentionedJids: [] };
+  }
+
+  const deduped = new Map<string, { jid: string; displayName: string; digits: string }>();
+  for (const m of mentions) {
+    if (!m || typeof m.jid !== "string" || typeof m.displayName !== "string") continue;
+    const normJid = normalizeJid(m.jid) ?? m.jid.trim();
+    const displayName = m.displayName.trim();
+    const digits = jidDigits(normJid);
+    if (!normJid.includes("@") || !displayName || !digits) continue;
+    const key = `${normJid.toLowerCase()}::${displayName.toLowerCase()}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, { jid: normJid, displayName, digits });
+    }
+  }
+
+  const sorted = [...deduped.values()].sort(
+    (a, b) => b.displayName.length - a.displayName.length
+  );
+
+  let wireText = displayText;
+  const mentionedSet = new Set<string>();
+
+  for (const item of sorted) {
+    const re = new RegExp(
+      `(?<![\\w.+-])@${escapeRegex(item.displayName)}(?![\\wÀ-ÿ])`,
+      "gi"
+    );
+    let matched = false;
+    wireText = wireText.replace(re, () => {
+      matched = true;
+      return `@${item.digits}`;
+    });
+    if (matched) {
+      mentionedSet.add(item.jid);
+    }
+  }
+
+  return { wireText, mentionedJids: [...mentionedSet] };
 }
 
 /** messageTimestamp (segundos ou bigint) -> ms */
@@ -168,8 +359,18 @@ export function scheduleResume(): void {
   void Promise.resolve().then(resumeAll).catch((e) => console.error("[whatsapp] resume:", e));
 }
 
+function unwrapMessageContent(raw: unknown): NonNullable<IncomingMessage["message"]> | null {
+  if (!raw || typeof raw !== "object") return null;
+  const normalized = normalizeMessageContent(raw as never) as IncomingMessage["message"] | undefined;
+  return (normalized ?? (raw as IncomingMessage["message"])) ?? null;
+}
+
+function unwrapMessage(msg: IncomingMessage): NonNullable<IncomingMessage["message"]> | null {
+  return unwrapMessageContent(msg.message);
+}
+
 function extractText(msg: IncomingMessage): string {
-  const m = msg.message;
+  const m = unwrapMessage(msg);
   if (!m) return "";
   return (
     m.conversation ??
@@ -181,14 +382,15 @@ function extractText(msg: IncomingMessage): string {
   );
 }
 
-function extractMentionedJids(msg: IncomingMessage): string[] {
-  const m = msg.message;
+function extractMentionedJidsFromContent(content: unknown): string[] {
+  const m = unwrapMessageContent(content);
   if (!m) return [];
   const cis = [
     m.extendedTextMessage?.contextInfo,
     m.imageMessage?.contextInfo,
     m.videoMessage?.contextInfo,
     m.documentMessage?.contextInfo,
+    m.audioMessage?.contextInfo,
   ];
   const out = new Set<string>();
   for (const ci of cis) {
@@ -202,85 +404,518 @@ function extractMentionedJids(msg: IncomingMessage): string[] {
   return [...out];
 }
 
+function extractMentionedJids(msg: IncomingMessage): string[] {
+  return extractMentionedJidsFromContent(msg.message);
+}
+
+type ParticipantDirectoryEntry = {
+  mentionLabel: string;
+  memberName: string;
+  phone: string | null;
+  phoneJid: string | null;
+  lid: string | null;
+  primaryJid: string;
+  role: "superadmin" | "admin" | "member";
+  isSelf: boolean;
+};
+
+type GroupParticipantDirectory = {
+  meta: GroupMetaLite | null;
+  connected: boolean;
+  byDigits: Map<string, ParticipantDirectoryEntry>;
+  members: GroupMemberDTO[];
+};
+
+async function getGroupMetadata(
+  numberId: string,
+  groupJid: string,
+  opts?: { force?: boolean }
+): Promise<GroupMetaLite | null> {
+  const session = sessions.get(numberId);
+  if (!session || session.status !== "CONNECTED") return null;
+
+  const cached = session.groupMetaCache.get(groupJid);
+  if (!opts?.force && cached && Date.now() - cached.fetchedAt < GROUP_META_TTL_MS) {
+    return cached.meta;
+  }
+
+  try {
+    const raw = (await session.socket.groupMetadata(groupJid)) as unknown as GroupMetaLite;
+    if (!raw) return cached?.meta ?? null;
+
+    for (const p of raw.participants ?? []) {
+      recordContactInfo(session, {
+        id: p.id,
+        jid: p.jid,
+        lid: p.lid,
+        name: p.name,
+        notify: p.notify,
+        verifiedName: p.verifiedName,
+      });
+    }
+
+    session.groupMetaCache.set(groupJid, { meta: raw, fetchedAt: Date.now() });
+    return raw;
+  } catch {
+    return cached?.meta ?? null;
+  }
+}
+
+async function getSelfDigits(
+  numberId: string,
+  selfPhoneFallback?: string | null
+): Promise<{ selfPnDigits: string | null; selfLidDigits: string | null }> {
+  const session = sessions.get(numberId);
+  let selfPnDigits = session?.selfPnDigits ?? null;
+  const selfLidDigits = session?.selfLidDigits ?? null;
+
+  if (!selfPnDigits) {
+    const rawFallback = selfPhoneFallback ? digitsOnly(selfPhoneFallback) : "";
+    if (rawFallback) {
+      selfPnDigits = rawFallback;
+    } else {
+      const num = await prisma.whatsAppNumber
+        .findUnique({ where: { id: numberId }, select: { phone: true } })
+        .catch(() => null);
+      selfPnDigits = num?.phone ? digitsOnly(num.phone) : null;
+    }
+  }
+  return { selfPnDigits, selfLidDigits };
+}
+
+function cachedContactLabel(session: ManagedSession | undefined, digitsList: string[]): string | null {
+  if (!session) return null;
+  for (const d of digitsList) {
+    const c = session.contactCache.get(d);
+    const label = c?.name || c?.verifiedName || c?.notify;
+    if (isHumanName(label)) return label!.trim();
+  }
+  return null;
+}
+
+function pickRole(
+  p: GroupParticipantLite,
+  meta: GroupMetaLite
+): "superadmin" | "admin" | "member" {
+  if (p.admin === "superadmin") return "superadmin";
+  const ownerDigits = jidDigits(meta.ownerJid) || jidDigits(meta.owner);
+  const pDigits = [jidDigits(p.jid), jidDigits(p.lid), jidDigits(p.id)].filter(Boolean);
+  if (ownerDigits && pDigits.includes(ownerDigits)) return "superadmin";
+  if (p.admin === "admin") return "admin";
+  return "member";
+}
+
+function sortMembers(members: GroupMemberDTO[]): GroupMemberDTO[] {
+  const roleRank = { superadmin: 0, admin: 1, member: 2 };
+  return [...members].sort((a, b) => {
+    if (a.isSelf !== b.isSelf) return a.isSelf ? -1 : 1;
+    if (roleRank[a.role] !== roleRank[b.role]) return roleRank[a.role] - roleRank[b.role];
+    return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+  });
+}
+
+async function buildGroupParticipantDirectory(
+  numberId: string,
+  groupJid: string,
+  conversationId: string | null,
+  opts?: { force?: boolean; groupMeta?: GroupMetaLite | null; selfPhoneFallback?: string | null }
+): Promise<GroupParticipantDirectory> {
+  const session = sessions.get(numberId);
+  const connected = Boolean(session && session.status === "CONNECTED");
+  const meta =
+    opts?.groupMeta !== undefined
+      ? opts.groupMeta
+      : await getGroupMetadata(numberId, groupJid, { force: opts?.force });
+  const { selfPnDigits, selfLidDigits } = await getSelfDigits(numberId, opts?.selfPhoneFallback);
+
+  const byDigits = new Map<string, ParticipantDirectoryEntry>();
+  const recentSenderNames = new Map<string, string>();
+
+  if (conversationId) {
+    const msgs = await prisma.message.findMany({
+      where: { conversationId, senderJid: { not: null }, senderName: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+      select: { senderJid: true, senderName: true },
+    });
+    for (const m of msgs) {
+      const d = jidDigits(m.senderJid);
+      if (d && !recentSenderNames.has(d) && isHumanName(m.senderName)) {
+        recentSenderNames.set(d, m.senderName!.trim());
+      }
+    }
+  }
+
+  if (meta && (meta.participants?.length ?? 0) > 0) {
+    const allJids = new Set<string>();
+    const allPhones = new Set<string>();
+
+    for (const p of meta.participants) {
+      const idNorm = normalizeJid(p.id) ?? p.id;
+      const pJid = isPhoneJid(p.jid) ? normalizeJid(p.jid!) : isPhoneJid(idNorm) ? idNorm : null;
+      const pLid = isLidJid(p.lid) ? normalizeJid(p.lid!) : isLidJid(idNorm) ? idNorm : null;
+      const lidD = jidDigits(pLid);
+      const pnD = jidDigits(pJid) || (lidD ? session?.lidToPn.get(lidD) ?? "" : "");
+
+      if (pJid) allJids.add(pJid);
+      if (pLid) allJids.add(pLid);
+      if (pnD) {
+        allPhones.add(pnD);
+        allJids.add(`${pnD}@s.whatsapp.net`);
+      }
+      if (lidD) allPhones.add(lidD);
+    }
+
+    const dbContacts =
+      allJids.size > 0 || allPhones.size > 0
+        ? await prisma.contact.findMany({
+            where: {
+              isGroup: false,
+              OR: [
+                ...(allJids.size > 0 ? [{ jid: { in: [...allJids] } }] : []),
+                ...(allPhones.size > 0 ? [{ phone: { in: [...allPhones] } }] : []),
+              ],
+            },
+            select: { jid: true, phone: true, name: true, pushName: true },
+          })
+        : [];
+
+    const dbByJid = new Map<string, (typeof dbContacts)[number]>();
+    const dbByPhone = new Map<string, (typeof dbContacts)[number]>();
+    for (const c of dbContacts) {
+      if (c.jid) dbByJid.set(normalizeJid(c.jid) ?? c.jid, c);
+      if (c.phone) dbByPhone.set(c.phone, c);
+    }
+
+    const members: GroupMemberDTO[] = [];
+    const seenPrimary = new Set<string>();
+
+    for (const p of meta.participants) {
+      const idNorm = normalizeJid(p.id) ?? p.id;
+      const rawLid = isLidJid(p.lid) ? normalizeJid(p.lid!) : isLidJid(idNorm) ? idNorm : null;
+      const lidDigits = jidDigits(rawLid);
+      const mappedPn = lidDigits ? session?.lidToPn.get(lidDigits) ?? null : null;
+
+      let phoneJid = isPhoneJid(p.jid) ? normalizeJid(p.jid!) : isPhoneJid(idNorm) ? idNorm : null;
+      const pnDigits = jidDigits(phoneJid) || mappedPn || null;
+      if (!phoneJid && pnDigits) {
+        phoneJid = `${pnDigits}@s.whatsapp.net`;
+      }
+      const mappedLid = !rawLid && pnDigits ? session?.pnToLid.get(pnDigits) ?? null : null;
+      const lid = rawLid ?? (mappedLid ? `${mappedLid}@lid` : null);
+      const finalLidDigits = jidDigits(lid);
+
+      const primaryJid =
+        (meta.addressingMode === "lid" ? lid ?? phoneJid : phoneJid ?? lid) ?? idNorm;
+      if (seenPrimary.has(primaryJid)) continue;
+      seenPrimary.add(primaryJid);
+
+      const digitsKeys = [...new Set([pnDigits, finalLidDigits, jidDigits(idNorm)].filter(Boolean) as string[])];
+      const isSelf = Boolean(
+        (selfPnDigits && digitsKeys.includes(selfPnDigits)) ||
+          (selfLidDigits && digitsKeys.includes(selfLidDigits))
+      );
+
+      const dbHit =
+        (phoneJid && dbByJid.get(phoneJid)) ||
+        (lid && dbByJid.get(lid)) ||
+        (pnDigits && dbByPhone.get(pnDigits)) ||
+        (finalLidDigits && dbByPhone.get(finalLidDigits)) ||
+        null;
+
+      const dbName =
+        (isHumanName(dbHit?.name) ? dbHit!.name!.trim() : null) ||
+        (isHumanName(dbHit?.pushName) ? dbHit!.pushName!.trim() : null);
+
+      const cacheName = cachedContactLabel(session, digitsKeys);
+      const participantName =
+        (isHumanName(p.name) ? p.name!.trim() : null) ||
+        (isHumanName(p.verifiedName) ? p.verifiedName!.trim() : null) ||
+        (isHumanName(p.notify) ? p.notify!.trim() : null);
+      const histName = digitsKeys.map((k) => recentSenderNames.get(k)).find(Boolean) ?? null;
+
+      const resolvedHuman = dbName || cacheName || participantName || histName;
+      const memberName =
+        resolvedHuman ||
+        (pnDigits ? formatPhoneDisplay(pnDigits) : null) ||
+        (isSelf ? "Você" : digitsKeys[0] || primaryJid);
+      const mentionLabel = isSelf ? "Você" : memberName;
+      const role = pickRole(p, meta);
+
+      const entry: ParticipantDirectoryEntry = {
+        mentionLabel,
+        memberName,
+        phone: pnDigits,
+        phoneJid,
+        lid,
+        primaryJid,
+        role,
+        isSelf,
+      };
+      for (const k of digitsKeys) {
+        byDigits.set(k, entry);
+      }
+
+      members.push({
+        jid: primaryJid,
+        phoneJid,
+        lid,
+        phone: pnDigits,
+        name: memberName,
+        role,
+        isSelf,
+      });
+    }
+
+    return { meta, connected, byDigits, members: sortMembers(members) };
+  }
+
+  // Fallback quando desconectado ou sem groupMetadata: usa participantes vistos no historico
+  const historyMembers: GroupMemberDTO[] = [];
+  if (conversationId) {
+    const historyRows = await prisma.message.findMany({
+      where: { conversationId, senderJid: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 500,
+      select: { senderJid: true, senderName: true },
+    });
+
+    const uniqueByDigits = new Map<string, { jid: string; name: string | null }>();
+    for (const row of historyRows) {
+      if (!row.senderJid) continue;
+      const d = jidDigits(row.senderJid);
+      if (!d) continue;
+      const prev = uniqueByDigits.get(d);
+      const candidateName = isHumanName(row.senderName) ? row.senderName!.trim() : null;
+      if (!prev) {
+        uniqueByDigits.set(d, {
+          jid: normalizeJid(row.senderJid) ?? row.senderJid,
+          name: candidateName,
+        });
+      } else if (!prev.name && candidateName) {
+        prev.name = candidateName;
+      }
+    }
+
+    const histJids = [...uniqueByDigits.values()].map((v) => v.jid);
+    const histDigits = [...uniqueByDigits.keys()];
+    const dbContacts =
+      histJids.length > 0
+        ? await prisma.contact.findMany({
+            where: {
+              isGroup: false,
+              OR: [{ jid: { in: histJids } }, { phone: { in: histDigits } }],
+            },
+            select: { jid: true, phone: true, name: true, pushName: true },
+          })
+        : [];
+
+    for (const [d, info] of uniqueByDigits.entries()) {
+      const pnD = isPhoneJid(info.jid) ? d : session?.lidToPn.get(d) ?? null;
+      const lid = isLidJid(info.jid) ? info.jid : null;
+      const phoneJid = isPhoneJid(info.jid) ? info.jid : pnD ? `${pnD}@s.whatsapp.net` : null;
+      const isSelf = Boolean(
+        (selfPnDigits && (d === selfPnDigits || pnD === selfPnDigits)) ||
+          (selfLidDigits && d === selfLidDigits)
+      );
+      const dbHit = dbContacts.find((c) => c.jid === info.jid || c.phone === d || (pnD && c.phone === pnD));
+      const dbName =
+        (isHumanName(dbHit?.name) ? dbHit!.name!.trim() : null) ||
+        (isHumanName(dbHit?.pushName) ? dbHit!.pushName!.trim() : null);
+      const cacheName = cachedContactLabel(session, pnD ? [d, pnD] : [d]);
+      const memberName =
+        dbName ||
+        cacheName ||
+        info.name ||
+        (pnD ? formatPhoneDisplay(pnD) : null) ||
+        (isSelf ? "Você" : d);
+      const mentionLabel = isSelf ? "Você" : memberName;
+
+      const entry: ParticipantDirectoryEntry = {
+        mentionLabel,
+        memberName,
+        phone: pnD,
+        phoneJid,
+        lid,
+        primaryJid: info.jid,
+        role: "member",
+        isSelf,
+      };
+      byDigits.set(d, entry);
+      if (pnD) byDigits.set(pnD, entry);
+
+      historyMembers.push({
+        jid: info.jid,
+        phoneJid,
+        lid,
+        phone: pnD,
+        name: memberName,
+        role: "member",
+        isSelf,
+      });
+    }
+  }
+
+  return { meta: null, connected, byDigits, members: sortMembers(historyMembers) };
+}
+
+function replaceMentionTokens(text: string, labels: Map<string, string>): string {
+  if (!text || labels.size === 0) return text;
+  let resolved = text;
+  for (const [digits, label] of labels.entries()) {
+    const re = new RegExp(`(?<![\\w.+-])@${digits}(?!\\d)`, "g");
+    resolved = resolved.replace(re, () => `@${label}`);
+  }
+  return resolved;
+}
+
 /**
- * Converte mencoes "@176398668947474" (LID ou telefone) no nome do contato
- * (ou "Você" quando for o proprio numero conectado) usando contextInfo.mentionedJid.
+ * Converte mencoes "@176398668947474" (LID ou telefone) no nome do participante/contato
+ * (ou "Você" quando for o proprio numero conectado) usando groupMetadata, cache de contatos,
+ * banco de contatos e historico do grupo.
  */
-async function resolveMentions(
+async function resolveTextMentions(
   numberId: string,
   text: string,
-  msg: IncomingMessage
+  opts?: {
+    mentionedJids?: string[];
+    groupJid?: string | null;
+    conversationId?: string | null;
+    groupMeta?: GroupMetaLite | null;
+    selfPhoneFallback?: string | null;
+  }
 ): Promise<string> {
   if (!text || !text.includes("@")) return text;
-  const jids = extractMentionedJids(msg);
-  if (jids.length === 0) return text;
+
+  const jids = opts?.mentionedJids ?? [];
+  const rawTokens = new Set<string>();
+  for (const m of text.matchAll(RAW_MENTION_FIND_RE)) {
+    if (m[1]) rawTokens.add(m[1]);
+  }
+  if (jids.length === 0 && rawTokens.size === 0) return text;
 
   const session = sessions.get(numberId);
-  const labels = new Map<string, string>();
-  const unresolved: { rawDigits: string; normJid: string }[] = [];
+  const { selfPnDigits, selfLidDigits } = await getSelfDigits(numberId, opts?.selfPhoneFallback);
 
+  const directory = opts?.groupJid
+    ? await buildGroupParticipantDirectory(numberId, opts.groupJid, opts.conversationId ?? null, {
+        groupMeta: opts.groupMeta,
+        selfPhoneFallback: opts.selfPhoneFallback,
+      })
+    : null;
+
+  const targetMap = new Map<string, string | null>(); // digits -> normJid|null
   for (const jid of jids) {
-    const rawDigits = digitsOnly(jid.split("@")[0].split(":")[0]);
-    if (!rawDigits) continue;
-    if (
-      (session?.selfLidDigits && rawDigits === session.selfLidDigits) ||
-      (session?.selfPnDigits && rawDigits === session.selfPnDigits)
-    ) {
-      labels.set(rawDigits, "Você");
+    const d = jidDigits(jid);
+    if (d) targetMap.set(d, normalizeJid(jid) ?? jid);
+  }
+  for (const d of rawTokens) {
+    if (!targetMap.has(d)) targetMap.set(d, null);
+  }
+
+  const labels = new Map<string, string>();
+  const unresolved: { digits: string; normJid: string | null; pnDigits: string | null }[] = [];
+
+  for (const [digits, normJid] of targetMap.entries()) {
+    if ((selfLidDigits && digits === selfLidDigits) || (selfPnDigits && digits === selfPnDigits)) {
+      labels.set(digits, "Você");
       continue;
     }
-    const normJid = normalizeJid(jid) ?? jid;
-    unresolved.push({ rawDigits, normJid });
+
+    const dirHit = directory?.byDigits.get(digits);
+    if (dirHit) {
+      labels.set(digits, dirHit.mentionLabel);
+      continue;
+    }
+
+    const mappedPn =
+      (isPhoneJid(normJid) ? digits : null) ??
+      session?.lidToPn.get(digits) ??
+      null;
+    unresolved.push({ digits, normJid, pnDigits: mappedPn });
   }
 
   if (unresolved.length > 0) {
-    const normJids = unresolved.map((u) => u.normJid);
-    const rawList = unresolved.map((u) => u.rawDigits);
-    const contacts = await prisma.contact.findMany({
-      where: {
-        OR: [{ jid: { in: normJids } }, { phone: { in: rawList } }],
-      },
-      select: { jid: true, phone: true, name: true, pushName: true },
-    });
+    const queryJids = new Set<string>();
+    const queryPhones = new Set<string>();
+    for (const u of unresolved) {
+      if (u.normJid) queryJids.add(u.normJid);
+      queryPhones.add(u.digits);
+      if (u.pnDigits) {
+        queryPhones.add(u.pnDigits);
+        queryJids.add(`${u.pnDigits}@s.whatsapp.net`);
+      }
+    }
+
+    const [contacts, fallbackMsgs] = await Promise.all([
+      prisma.contact.findMany({
+        where: {
+          isGroup: false,
+          OR: [
+            ...(queryJids.size > 0 ? [{ jid: { in: [...queryJids] } }] : []),
+            { phone: { in: [...queryPhones] } },
+          ],
+        },
+        select: { jid: true, phone: true, name: true, pushName: true },
+      }),
+      prisma.message.findMany({
+        where: {
+          senderName: { not: null },
+          OR: [...queryPhones].map((d) => ({ senderJid: { contains: d } })),
+        },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        select: { conversationId: true, senderJid: true, senderName: true },
+      }),
+    ]);
 
     for (const u of unresolved) {
-      const hit = contacts.find(
-        (c) => c.jid === u.normJid || c.phone === u.rawDigits
+      const contactHit = contacts.find(
+        (c) =>
+          (u.normJid && c.jid === u.normJid) ||
+          c.phone === u.digits ||
+          (u.pnDigits && (c.phone === u.pnDigits || c.jid === `${u.pnDigits}@s.whatsapp.net`))
       );
-      if (hit) {
-        const display = hit.name || hit.pushName || hit.phone;
-        if (display) labels.set(u.rawDigits, display);
+      const dbLabel =
+        (isHumanName(contactHit?.name) ? contactHit!.name!.trim() : null) ||
+        (isHumanName(contactHit?.pushName) ? contactHit!.pushName!.trim() : null);
+      if (dbLabel) {
+        labels.set(u.digits, dbLabel);
         continue;
       }
 
-      // Fallback LID -> PN via lidMapping do Baileys (quando disponivel)
-      try {
-        const sock = session?.socket as unknown as {
-          signalRepository?: { lidMapping?: { getPNForLID?: (j: string) => Promise<string | null> } };
-        } | undefined;
-        const pnJid = await sock?.signalRepository?.lidMapping?.getPNForLID?.(u.normJid);
-        const pnDigits = pnJid ? digitsOnly(pnJid.split("@")[0].split(":")[0]) : "";
-        if (pnDigits) {
-          const byPn = await prisma.contact.findUnique({
-            where: { phone: pnDigits },
-            select: { name: true, pushName: true, phone: true },
-          });
-          labels.set(u.rawDigits, byPn?.name || byPn?.pushName || pnDigits);
-        }
-      } catch {
-        /* lidMapping opcional */
+      const cacheLabel = cachedContactLabel(
+        session,
+        u.pnDigits ? [u.digits, u.pnDigits] : [u.digits]
+      );
+      if (cacheLabel) {
+        labels.set(u.digits, cacheLabel);
+        continue;
+      }
+
+      const candidates = fallbackMsgs.filter((m) => {
+        const sd = jidDigits(m.senderJid);
+        return (sd === u.digits || (u.pnDigits && sd === u.pnDigits)) && isHumanName(m.senderName);
+      });
+      const sameConvHit = opts?.conversationId
+        ? candidates.find((m) => m.conversationId === opts.conversationId)
+        : undefined;
+      const msgHit = sameConvHit ?? candidates[0];
+      if (msgHit?.senderName) {
+        labels.set(u.digits, msgHit.senderName.trim());
+        continue;
+      }
+
+      const pnFromContact =
+        contactHit && isPhoneJid(contactHit.jid) ? jidDigits(contactHit.jid) : null;
+      const knownPn = u.pnDigits || pnFromContact;
+      if (knownPn) {
+        labels.set(u.digits, formatPhoneDisplay(knownPn));
       }
     }
   }
 
-  if (labels.size === 0) return text;
-
-  let resolved = text;
-  for (const [digits, name] of labels.entries()) {
-    const re = new RegExp(`(?<!\\d)@${digits}(?!\\d)`, "g");
-    resolved = resolved.replace(re, `@${name}`);
-  }
-  return resolved;
+  return replaceMentionTokens(text, labels);
 }
 
 /** Rotulo curto quando a mensagem citada e midia sem legenda. */
@@ -297,7 +932,7 @@ function quotedMediaLabel(m: NonNullable<IncomingMessage["message"]>): string {
  * qualquer corpo (o WhatsApp marca com a etiqueta "Encaminhada").
  */
 function detectForwarded(msg: IncomingMessage): boolean {
-  const m = msg.message;
+  const m = unwrapMessage(msg);
   if (!m) return false;
   const cis = [
     m.extendedTextMessage?.contextInfo,
@@ -317,7 +952,7 @@ function detectForwarded(msg: IncomingMessage): boolean {
  * Devolve trecho curto para exibir na bolha + telefone real de quem falou.
  */
 function extractQuote(msg: IncomingMessage): QuotedInfo | null {
-  const m = msg.message;
+  const m = unwrapMessage(msg);
   if (!m) return null;
   const ci = (m.extendedTextMessage?.contextInfo ??
     m.imageMessage?.contextInfo ??
@@ -330,7 +965,7 @@ function extractQuote(msg: IncomingMessage): QuotedInfo | null {
         participant?: string | null;
       }
     | null | undefined;
-  const quoted = ci?.quotedMessage;
+  const quoted = unwrapMessageContent(ci?.quotedMessage);
   if (!quoted) return null;
 
   const q = quoted as {
@@ -359,6 +994,7 @@ function extractQuote(msg: IncomingMessage): QuotedInfo | null {
     snippet: trimmed,
     sender: senderDigits || null,
     senderJidDigits: senderDigits || null,
+    quotedMentionedJids: extractMentionedJidsFromContent(quoted),
   };
 }
 
@@ -412,7 +1048,7 @@ async function downloadMessageMedia(msg: unknown): Promise<Buffer | null> {
 }
 
 function extractMedia(msg: IncomingMessage): IncomingMedia | null {
-  const m = msg.message;
+  const m = unwrapMessage(msg);
   if (!m) return null;
   if (m.imageMessage?.mimetype) {
     return { mime: m.imageMessage.mimetype, caption: m.imageMessage.caption ?? "", fileName: "" };
@@ -557,13 +1193,49 @@ export const waManager = {
       markOnlineOnConnect: false,
     });
 
-    const session: ManagedSession = { socket, status: "CONNECTING", qr: null };
+    const session: ManagedSession = {
+      socket,
+      status: "CONNECTING",
+      qr: null,
+      groupMetaCache: new Map(),
+      contactCache: new Map(),
+      lidToPn: new Map(),
+      pnToLid: new Map(),
+    };
     sessions.set(numberId, session);
     // creds do disco podem ja carregar a identidade propria (sessoes antigas)
     syncSelfIdentity(session);
     await this.setDbStatus(numberId, "CONNECTING");
 
     socket.ev.on("creds.update", saveCreds);
+
+    socket.ev.on("contacts.upsert", (contacts) => {
+      for (const c of contacts) recordContactInfo(session, c);
+    });
+
+    socket.ev.on("contacts.update", (contacts) => {
+      for (const c of contacts) recordContactInfo(session, c);
+    });
+
+    socket.ev.on("messaging-history.set", (data) => {
+      if (Array.isArray(data?.contacts)) {
+        for (const c of data.contacts) recordContactInfo(session, c);
+      }
+    });
+
+    socket.ev.on("chats.phoneNumberShare", (share) => {
+      recordContactInfo(session, { lid: share.lid, jid: share.jid });
+    });
+
+    socket.ev.on("groups.update", (updates) => {
+      for (const g of updates) {
+        if (g.id) session.groupMetaCache.delete(g.id);
+      }
+    });
+
+    socket.ev.on("group-participants.update", (update) => {
+      if (update?.id) session.groupMetaCache.delete(update.id);
+    });
 
     socket.ev.on("connection.update", (update) => {
       if (update.connection || update.lastDisconnect || update.qr) {
@@ -718,7 +1390,8 @@ export const waManager = {
 
         // reacoes chegam como protocolMessage (type = 3): atualizam a
         // mensagem original e nao criam registros novos
-        const protocol = msg.message?.protocolMessage;
+        const unwrapped = unwrapMessage(msg);
+        const protocol = msg.message?.protocolMessage ?? unwrapped?.protocolMessage;
         // REVOKE (type = 0): o contato apagou mensagens dele(s) "para todos";
         // o painel reforma visualmente a mensagem como "(mensagem apagada)"
         if (protocol && protocol.type === 0 && protocol.key?.id) {
@@ -728,6 +1401,21 @@ export const waManager = {
         if (protocol && protocol.type === 3 && protocol.key?.id) {
           await this.applyReaction(numberId, msg);
           continue;
+        }
+
+        // alimenta o cache em memoria com identidade/pushName de quem enviou
+        if (!msg.key.fromMe) {
+          const senderJid = isGroup ? msg.key.participant : jid;
+          const senderPn =
+            msg.key.participantPn ??
+            msg.key.senderPn ??
+            (!isGroup ? msg.key.remoteJidAlt : null);
+          recordContactInfo(sessions.get(numberId), {
+            id: senderJid,
+            jid: senderPn,
+            lid: isLidJid(senderJid) ? senderJid : undefined,
+            notify: msg.pushName ?? undefined,
+          });
         }
 
         // LID: contas novas chegam com "<identificador>@lid" em vez do telefone.
@@ -743,7 +1431,6 @@ export const waManager = {
         const rawText = extractText(msg);
         const media = extractMedia(msg);
         if (!rawText && !media) continue; // sem conteudo tratavel
-        const text = rawText ? await resolveMentions(numberId, rawText, msg) : rawText;
 
         // historico antigo (sync do pareamento) nao entra no inbox
         const ageMs = Date.now() - messageTimestampMs(msg);
@@ -754,7 +1441,7 @@ export const waManager = {
           continue;
         }
 
-        await this.ingestMessage(numberId, msg, jid, phone, text, media, isGroup);
+        await this.ingestMessage(numberId, msg, jid, phone, rawText, media, isGroup);
       } catch (error) {
         console.error("[whatsapp] erro ao processar mensagem:", error);
       }
@@ -890,7 +1577,7 @@ export const waManager = {
     msg: IncomingMessage,
     jid: string,
     phone: string,
-    text: string,
+    rawText: string,
     media: IncomingMedia | null,
     isGroup = false
   ) {
@@ -908,14 +1595,12 @@ export const waManager = {
     }
 
     // 1) contato (guarda o jid real para responder com ele)
-    //    grupo: nome vem do subject do grupo (metadata do Baileys)
+    //    grupo: nome vem do subject do grupo (metadata do Baileys em cache)
+    let groupMeta: GroupMetaLite | null = null;
     let groupName: string | null = null;
     if (isGroup) {
-      const meta = await sessions
-        .get(numberId)
-        ?.socket.groupMetadata(jid)
-        .catch(() => null);
-      groupName = meta?.subject ?? null;
+      groupMeta = await getGroupMetadata(numberId, jid);
+      groupName = groupMeta?.subject ?? null;
     }
 
     // migracao LID -> numero real: contato criado com os digitos do LID passa
@@ -960,6 +1645,16 @@ export const waManager = {
 
     const wasClosed = conversation.status === "CLOSED";
 
+    // 2a) resolve mencoes (@176398668947474 -> @Nome / @Você) ja com groupMeta + conversa
+    const text = rawText
+      ? await resolveTextMentions(numberId, rawText, {
+          mentionedJids: extractMentionedJids(msg),
+          groupJid: isGroup ? jid : null,
+          conversationId: conversation.id,
+          groupMeta,
+        })
+      : rawText;
+
     // 3) midia (download antes de gravar a mensagem)
     let mediaUrl: string | undefined;
     let mediaType: string | undefined;
@@ -975,13 +1670,22 @@ export const waManager = {
       }
     }
 
-    // 4) mensagem
+    // 4) mensagem e citacao
     const quoted = extractQuote(msg);
-    // resposta citando outra mensagem ("responder" do WhatsApp)
-    // 4a) nome de quem falou a msg citada: grupos -> nome do participante
-    // obtido de mensagens anteriores da MESMA conversa; 1:1 -> o nome do
-    // contato (a citacao dele vem sempre sem PN util); autor = nosso numero
-    // (copiado do celular) -> "Você"
+    const resolvedQuotedSnippet = quoted?.snippet
+      ? await resolveTextMentions(numberId, quoted.snippet, {
+          mentionedJids: quoted.quotedMentionedJids,
+          groupJid: isGroup ? jid : null,
+          conversationId: conversation.id,
+          groupMeta,
+        })
+      : null;
+
+    const directory = isGroup
+      ? await buildGroupParticipantDirectory(numberId, jid, conversation.id, { groupMeta })
+      : null;
+
+    // 4a) nome de quem falou a msg citada
     let quotedSenderName: string | null = null;
     if (quoted?.senderJidDigits) {
       if (
@@ -990,19 +1694,54 @@ export const waManager = {
       ) {
         quotedSenderName = "Você";
       } else if (isGroup) {
-        const hit = await prisma.message.findFirst({
-          where: {
-            conversationId: conversation.id,
-            senderName: { not: null },
-            senderJid: { contains: quoted.senderJidDigits },
-          },
-          orderBy: { createdAt: "desc" },
-          select: { senderName: true },
-        });
-        quotedSenderName = hit?.senderName ?? null;
+        const dirHit = directory?.byDigits.get(quoted.senderJidDigits);
+        if (dirHit) {
+          quotedSenderName = dirHit.mentionLabel;
+        } else {
+          const mappedPn = session?.lidToPn.get(quoted.senderJidDigits) ?? null;
+          const digitsCandidates = mappedPn
+            ? [quoted.senderJidDigits, mappedPn]
+            : [quoted.senderJidDigits];
+          const hit = await prisma.message.findFirst({
+            where: {
+              conversationId: conversation.id,
+              senderName: { not: null },
+              OR: digitsCandidates.map((d) => ({ senderJid: { contains: d } })),
+            },
+            orderBy: { createdAt: "desc" },
+            select: { senderName: true },
+          });
+          quotedSenderName =
+            hit?.senderName ??
+            cachedContactLabel(session ?? undefined, digitsCandidates) ??
+            (mappedPn ? formatPhoneDisplay(mappedPn) : null);
+        }
       } else {
         quotedSenderName = contact.name ?? null;
       }
+    }
+
+    // em grupos, resolve o nome exibido do participante que enviou a mensagem
+    let groupSenderName: string | null = null;
+    if (isGroup && !msg.key.fromMe) {
+      const partDigits = jidDigits(msg.key.participant);
+      const pnDigits = jidDigits(msg.key.participantPn) || (partDigits ? session?.lidToPn.get(partDigits) ?? "" : "");
+      const dirEntry =
+        (partDigits && directory?.byDigits.get(partDigits)) ||
+        (pnDigits && directory?.byDigits.get(pnDigits)) ||
+        null;
+      const pushLabel = isHumanName(msg.pushName) ? msg.pushName!.trim() : null;
+      const cacheLabel = cachedContactLabel(
+        session ?? undefined,
+        [partDigits, pnDigits].filter(Boolean)
+      );
+      groupSenderName =
+        (dirEntry && isHumanName(dirEntry.memberName) ? dirEntry.memberName : null) ||
+        pushLabel ||
+        cacheLabel ||
+        (pnDigits ? formatPhoneDisplay(pnDigits) : null) ||
+        partDigits ||
+        null;
     }
 
     const created = await prisma.message.create({
@@ -1016,16 +1755,11 @@ export const waManager = {
         externalId: msg.key.id ?? null,
         status: "SENT",
         // em grupos, guarda quem falou (p/ exibir o nome na bolha)
-        senderName:
-          isGroup && !msg.key.fromMe
-            ? msg.pushName ??
-              digitsOnly((msg.key.participantPn ?? msg.key.participant ?? "").split("@")[0]) ??
-              null
-            : null,
+        senderName: groupSenderName,
         // em grupos: jid do autor (necessario p/ reagir as mensagens dele)
         senderJid: isGroup && !msg.key.fromMe ? (msg.key.participant ?? null) : null,
         // resposta citando outra mensagem ("responder" do WhatsApp)
-        quotedSnippet: quoted?.snippet ?? null,
+        quotedSnippet: resolvedQuotedSnippet,
         forwarded: detectForwarded(msg),
         quotedSender: quoted?.sender ?? null,
         quotedSenderName,
@@ -1068,40 +1802,199 @@ export const waManager = {
     }
   },
 
+  async getGroupMembers(
+    numberId: string,
+    groupJid: string,
+    conversationId: string | null,
+    opts?: { force?: boolean; selfPhoneFallback?: string | null }
+  ): Promise<GroupInfoDTO> {
+    const dir = await buildGroupParticipantDirectory(numberId, groupJid, conversationId, opts);
+    return {
+      subject: dir.meta?.subject ?? null,
+      description: dir.meta?.desc ?? null,
+      size: dir.meta?.size ?? dir.members.length,
+      addressingMode: dir.meta?.addressingMode ?? null,
+      connected: dir.connected,
+      fallbackFromHistory: !dir.meta,
+      members: dir.members,
+    };
+  },
+
+  async resolveStoredGroupMentions<T extends { content: string; quotedSnippet?: string | null }>(
+    numberId: string,
+    groupJid: string,
+    conversationId: string | null,
+    items: T[],
+    selfPhoneFallback?: string | null
+  ): Promise<T[]> {
+    const needsResolution = items.some(
+      (item) =>
+        (item.content && RAW_MENTION_TEST_RE.test(item.content)) ||
+        (item.quotedSnippet && RAW_MENTION_TEST_RE.test(item.quotedSnippet))
+    );
+    if (!needsResolution) return items;
+
+    const session = sessions.get(numberId);
+    const { selfPnDigits, selfLidDigits } = await getSelfDigits(numberId, selfPhoneFallback);
+    const directory = await buildGroupParticipantDirectory(numberId, groupJid, conversationId, {
+      selfPhoneFallback,
+    });
+
+    const labels = new Map<string, string>();
+    const missing = new Set<string>();
+
+    const scan = (str?: string | null) => {
+      if (!str || !str.includes("@")) return;
+      for (const m of str.matchAll(RAW_MENTION_FIND_RE)) {
+        const d = m[1];
+        if (!d || labels.has(d)) continue;
+        if ((selfPnDigits && d === selfPnDigits) || (selfLidDigits && d === selfLidDigits)) {
+          labels.set(d, "Você");
+          continue;
+        }
+        const dirHit = directory.byDigits.get(d);
+        if (dirHit) {
+          labels.set(d, dirHit.mentionLabel);
+          continue;
+        }
+        missing.add(d);
+      }
+    };
+
+    for (const item of items) {
+      scan(item.content);
+      scan(item.quotedSnippet);
+    }
+
+    if (missing.size > 0) {
+      const missingArr = [...missing];
+      const mappedPns = missingArr
+        .map((d) => session?.lidToPn.get(d))
+        .filter((v): v is string => Boolean(v));
+      const allLookupDigits = [...new Set([...missingArr, ...mappedPns])];
+
+      const [contacts, fallbackMsgs] = await Promise.all([
+        prisma.contact.findMany({
+          where: {
+            isGroup: false,
+            OR: [
+              { phone: { in: allLookupDigits } },
+              ...allLookupDigits.map((d) => ({ jid: { contains: d } })),
+            ],
+          },
+          select: { jid: true, phone: true, name: true, pushName: true },
+        }),
+        prisma.message.findMany({
+          where: {
+            senderName: { not: null },
+            OR: allLookupDigits.map((d) => ({ senderJid: { contains: d } })),
+          },
+          orderBy: { createdAt: "desc" },
+          take: 150,
+          select: { conversationId: true, senderJid: true, senderName: true },
+        }),
+      ]);
+
+      for (const d of missingArr) {
+        const mappedPn = session?.lidToPn.get(d) ?? null;
+        const contactHit = contacts.find(
+          (c) =>
+            c.phone === d ||
+            jidDigits(c.jid) === d ||
+            (mappedPn && (c.phone === mappedPn || jidDigits(c.jid) === mappedPn))
+        );
+        const dbLabel =
+          (isHumanName(contactHit?.name) ? contactHit!.name!.trim() : null) ||
+          (isHumanName(contactHit?.pushName) ? contactHit!.pushName!.trim() : null);
+        if (dbLabel) {
+          labels.set(d, dbLabel);
+          continue;
+        }
+
+        const cacheLabel = cachedContactLabel(session, mappedPn ? [d, mappedPn] : [d]);
+        if (cacheLabel) {
+          labels.set(d, cacheLabel);
+          continue;
+        }
+
+        const msgHits = fallbackMsgs.filter((m) => {
+          const sd = jidDigits(m.senderJid);
+          return (sd === d || (mappedPn && sd === mappedPn)) && isHumanName(m.senderName);
+        });
+        const sameConv = conversationId
+          ? msgHits.find((m) => m.conversationId === conversationId)
+          : undefined;
+        const chosen = sameConv ?? msgHits[0];
+        if (chosen?.senderName) {
+          labels.set(d, chosen.senderName.trim());
+          continue;
+        }
+
+        const pnFromContact =
+          contactHit && isPhoneJid(contactHit.jid) ? jidDigits(contactHit.jid) : null;
+        const knownPn = mappedPn || pnFromContact;
+        if (knownPn) {
+          labels.set(d, formatPhoneDisplay(knownPn));
+        }
+      }
+    }
+
+    if (labels.size === 0) return items;
+
+    return items.map((item) => ({
+      ...item,
+      content: replaceMentionTokens(item.content, labels),
+      ...(item.quotedSnippet !== undefined
+        ? {
+            quotedSnippet: item.quotedSnippet
+              ? replaceMentionTokens(item.quotedSnippet, labels)
+              : item.quotedSnippet,
+          }
+        : {}),
+    }));
+  },
+
   async sendMessage(
     numberId: string,
     toPhone: string,
     text: string,
-    toJid?: string | null
+    toJid?: string | null,
+    mentions?: string[]
   ): Promise<{ externalId: string | null }> {
     const session = sessions.get(numberId);
     if (!session || session.status !== "CONNECTED") {
       throw new Error("Numero WhatsApp nao conectado");
     }
     const jid = toJid?.includes("@") ? toJid : `${digitsOnly(toPhone)}@s.whatsapp.net`;
-    const result = await session.socket.sendMessage(jid, { text });
+    const result = await session.socket.sendMessage(jid, {
+      text,
+      ...(mentions?.length ? { mentions } : {}),
+    });
     return { externalId: result?.key?.id ?? null };
   },
 
-  /** Envia midia (imagem/video/audio/documento) com legenda opcional. */  async sendMedia(
+  /** Envia midia (imagem/video/audio/documento) com legenda opcional. */
+  async sendMedia(
     numberId: string,
     toPhone: string,
     buffer: Buffer,
     mime: string,
     caption: string,
     fileName?: string,
-    toJid?: string | null
+    toJid?: string | null,
+    mentions?: string[]
   ): Promise<{ externalId: string | null }> {
     const session = sessions.get(numberId);
     if (!session || session.status !== "CONNECTED") {
       throw new Error("Numero WhatsApp nao conectado");
     }
     const jid = toJid?.includes("@") ? toJid : `${digitsOnly(toPhone)}@s.whatsapp.net`;
+    const mentionOpt = mentions?.length ? { mentions } : {};
 
     const content = mime.startsWith("image/")
-      ? { image: buffer, caption: caption || undefined, mimetype: mime }
+      ? { image: buffer, caption: caption || undefined, mimetype: mime, ...mentionOpt }
       : mime.startsWith("video/")
-        ? { video: buffer, caption: caption || undefined, mimetype: mime }
+        ? { video: buffer, caption: caption || undefined, mimetype: mime, ...mentionOpt }
         : mime.startsWith("audio/")
           ? { audio: buffer, mimetype: mime }
           : {
@@ -1109,6 +2002,7 @@ export const waManager = {
               mimetype: mime,
               fileName: fileName || "arquivo",
               caption: caption || undefined,
+              ...mentionOpt,
             };
 
     const result = await session.socket.sendMessage(jid, content as never);

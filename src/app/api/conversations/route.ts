@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { toConversationDTO } from "@/lib/dto";
 import { conversationVisibilityFilter, getSectorScope } from "@/lib/scope";
+import { waManager } from "@/lib/whatsapp/manager";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -65,8 +66,31 @@ export async function GET(req: NextRequest) {
   });
   const unread = new Map(unreadGroups.map((g) => [g.conversationId, g._count.id]));
 
+  const RAW_MENTION_RE = /(?<![\w.+-])@\d{10,20}(?!\d)/;
+  const resolved = await Promise.all(
+    conversations.map(async (c) => {
+      const first = c.messages?.[0];
+      if (c.contact.isGroup && first?.content && RAW_MENTION_RE.test(first.content)) {
+        const groupJid =
+          c.contact.jid ?? `${c.contact.phone.replace(/\D/g, "")}@g.us`;
+        const [patched] = await waManager.resolveStoredGroupMentions(
+          c.whatsappNumberId,
+          groupJid,
+          c.id,
+          [{ content: first.content }],
+          c.whatsappNumber.phone
+        );
+        return {
+          ...c,
+          messages: [{ ...first, content: patched.content }],
+        };
+      }
+      return c;
+    })
+  );
+
   return NextResponse.json(
-    conversations.map((c) => {
+    resolved.map((c) => {
       const dto = toConversationDTO(c);
       return { ...dto, unreadCount: unread.get(c.id) ?? 0 };
     })

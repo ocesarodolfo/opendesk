@@ -1,7 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageBubble, MessageList } from "./components/MessageBubble";
+import {
+  GroupMembersModal,
+  type GroupInfo,
+  type GroupMember,
+} from "./components/GroupMembersModal";
+import { MentionPopover } from "./components/MentionPopover";
 import { ToastHost, showToast } from "@/components/toast";
 import Modal from "@/components/modal";
 import { getMute, getSound, playSound, SOUND_EVENT, type SoundName } from "@/components/notif-sound";
@@ -154,6 +160,15 @@ export default function InboxClient() {
   const draftsRef = useRef<Record<string, string>>({});
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletingConv, setDeletingConv] = useState(false);
+  const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [pendingMentions, setPendingMentions] = useState<
+    { jid: string; displayName: string }[]
+  >([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [cursorPos, setCursorPos] = useState(0);
+  const [mentionDismissedKey, setMentionDismissedKey] = useState<string | null>(null);
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -210,7 +225,7 @@ export default function InboxClient() {
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
       } else if (e.key === "Escape") {
-        if (viewerSrc || deleteOpen || editingName || tagEditing) return;
+        if (viewerSrc || deleteOpen || membersOpen || editingName || tagEditing) return;
         if (repliesOpen) {
           setRepliesOpen(false);
         } else if (replyTo) {
@@ -225,7 +240,7 @@ export default function InboxClient() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [viewerSrc, deleteOpen, editingName, tagEditing, repliesOpen, replyTo, detailsOpen, selected, openingId]);
+  }, [viewerSrc, deleteOpen, membersOpen, editingName, tagEditing, repliesOpen, replyTo, detailsOpen, selected, openingId]);
 
   const loadList = useCallback(async (opts?: { cache?: boolean }) => {
     const params = new URLSearchParams();
@@ -367,6 +382,48 @@ export default function InboxClient() {
     return () => source.close();
   }, [loadList, loadDetail, muted, soundName]);
 
+  // carrega membros do grupo selecionado (e limpa ao sair/trocar para 1:1)
+  useEffect(() => {
+    const conv = selected?.conversation;
+    if (!conv || !conv.contactIsGroup) {
+      setGroupInfo(null);
+      setMembersLoading(false);
+      setMembersOpen(false);
+      return;
+    }
+    const controller = new AbortController();
+    setMembersLoading(true);
+    void fetch(`/api/conversations/${conv.id}/members`, { signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: GroupInfo | null) => {
+        if (!controller.signal.aborted && data) {
+          setGroupInfo(data);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!controller.signal.aborted) setMembersLoading(false);
+      });
+    return () => controller.abort();
+  }, [selected?.conversation.id, selected?.conversation.contactIsGroup]);
+
+  const refreshMembers = useCallback(async () => {
+    const conv = selected?.conversation;
+    if (!conv || !conv.contactIsGroup) return;
+    setMembersLoading(true);
+    try {
+      const res = await fetch(`/api/conversations/${conv.id}/members?refresh=1`);
+      if (res.ok) {
+        const data = (await res.json()) as GroupInfo;
+        setGroupInfo(data);
+      } else {
+        showToast("Não foi possível atualizar os membros do grupo.", "erro");
+      }
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [selected?.conversation]);
+
   // rolar ao fim: instantaneo. "Colar no rodape": ao abrir qualquer conversa
   // o usuario vai direto para a mensagem mais recente; mensagens novas só
   // arrastam a view se ele ja estava no rodape (como o WhatsApp faz)
@@ -497,7 +554,9 @@ export default function InboxClient() {
     setDraft("");
     delete draftsRef.current[convId];
     const reply = replyTo;
+    const mentionsToSend = pendingMentions;
     setReplyTo(null);
+    setPendingMentions([]);
     setSending(true);
     try {
       const res = await fetch(`/api/conversations/${convId}/messages`, {
@@ -507,6 +566,9 @@ export default function InboxClient() {
           content: text,
           replyName: reply?.name ?? null,
           replySnippet: reply?.snippet ?? null,
+          ...(conv.contactIsGroup && mentionsToSend.length > 0
+            ? { mentions: mentionsToSend }
+            : {}),
         }),
       });
       if (res.ok) {
@@ -541,6 +603,10 @@ export default function InboxClient() {
       else delete draftsRef.current[prevId];
     }
     setDraft(draftsRef.current[item.id] ?? "");
+    setPendingMentions([]);
+    setMentionDismissedKey(null);
+    setGroupInfo(null);
+    setMembersOpen(false);
     clearPendingFiles();
     setSelected(null);
     setOpeningId(item.id);
@@ -811,13 +877,16 @@ export default function InboxClient() {
   async function sendPendingFiles() {
     if (!selected || pendingFiles.length === 0) return;
     const convId = selected.conversation.id;
+    const isGroupConv = selected.conversation.contactIsGroup;
     const items = [...pendingFiles];
     const caption = draft.trim();
+    const mentionsToSend = pendingMentions;
     const groupKey = items.length > 1 ? crypto.randomUUID().slice(0, 8) : null;
 
     setUploading(true);
     clearPendingFiles();
     setDraft("");
+    setPendingMentions([]);
     delete draftsRef.current[convId];
 
     let failed = false;
@@ -850,6 +919,9 @@ export default function InboxClient() {
         form.set("file", file);
         // legenda vai apenas no primeiro arquivo do grupo para nao repetir no WhatsApp
         form.set("caption", i === 0 ? caption : "");
+        if (i === 0 && caption && isGroupConv && mentionsToSend.length > 0) {
+          form.set("mentions", JSON.stringify(mentionsToSend));
+        }
         if (groupKey) form.set("groupKey", groupKey);
 
         const res = await fetch(`/api/conversations/${convId}/media`, {
@@ -895,6 +967,106 @@ export default function InboxClient() {
     setRepliesOpen(false);
     setReplyIndex(0);
     setTimeout(() => composerRef.current?.focus(), 0);
+  }
+
+  // mencoes (@) em grupos: autocomplete + destaque nas bolhas
+  const mentionableMembers = useMemo(
+    () => (groupInfo?.members ?? []).filter((m) => !m.isSelf),
+    [groupInfo]
+  );
+
+  const mentionNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const m of groupInfo?.members ?? []) {
+      if (m.name) names.add(m.name);
+    }
+    for (const msg of selected?.messages ?? []) {
+      if (msg.senderName) names.add(msg.senderName);
+    }
+    return [...names];
+  }, [groupInfo, selected?.messages]);
+
+  const mentionTrigger = useMemo(() => {
+    if (!c?.contactIsGroup || !canSend || isSlashOpen) return null;
+    const before = draft.slice(0, cursorPos);
+    const match = before.match(/(?:^|[\s(\["'])(@([^\n@]{0,40}))$/);
+    if (!match) return null;
+    const atToken = match[1];
+    const rawQuery = match[2] ?? "";
+    // nao reabre depois de "@Nome Selecionado " seguido de texto normal
+    if (
+      pendingMentions.some((m) =>
+        rawQuery.toLowerCase().startsWith(`${m.displayName.toLowerCase()} `)
+      )
+    ) {
+      return null;
+    }
+    const start = before.length - atToken.length;
+    const key = `${start}:${rawQuery}`;
+    if (mentionDismissedKey === key) return null;
+    return { start, end: cursorPos, query: rawQuery, key };
+  }, [c?.contactIsGroup, canSend, isSlashOpen, draft, cursorPos, pendingMentions, mentionDismissedKey]);
+
+  const filteredMentionMembers = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const norm = (s: string) =>
+      s
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    const q = norm(mentionTrigger.query.trim());
+    if (!q) return mentionableMembers.slice(0, 12);
+    return mentionableMembers
+      .filter((m) => {
+        const nameHit = norm(m.name).includes(q);
+        const phoneHit = m.phone ? m.phone.includes(q) : false;
+        return nameHit || phoneHit;
+      })
+      .slice(0, 12);
+  }, [mentionTrigger, mentionableMembers]);
+
+  const showMentions = Boolean(
+    mentionTrigger &&
+      mentionableMembers.length > 0 &&
+      !(filteredMentionMembers.length === 0 && mentionTrigger.query.includes(" "))
+  );
+
+  function insertMention(member: GroupMember, mode: "composer" | "append" = "composer") {
+    const token = `@${member.name} `;
+    let nextDraft = draft;
+    let nextCursor = draft.length;
+
+    if (mode === "composer" && mentionTrigger) {
+      nextDraft =
+        draft.slice(0, mentionTrigger.start) + token + draft.slice(mentionTrigger.end);
+      nextCursor = mentionTrigger.start + token.length;
+    } else {
+      const pos = composerRef.current?.selectionStart ?? draft.length;
+      const before = draft.slice(0, pos);
+      const needsSpace = before.length > 0 && !/[\s\n]$/.test(before);
+      const inserted = `${needsSpace ? " " : ""}${token}`;
+      nextDraft = before + inserted + draft.slice(pos);
+      nextCursor = before.length + inserted.length;
+    }
+
+    setDraft(nextDraft);
+    setCursorPos(nextCursor);
+    setMentionIndex(0);
+    setMentionDismissedKey(null);
+    setMembersOpen(false);
+    setPendingMentions((prev) => {
+      if (prev.some((p) => p.jid === member.jid && p.displayName === member.name)) {
+        return prev;
+      }
+      return [...prev, { jid: member.jid, displayName: member.name }];
+    });
+
+    setTimeout(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
   }
 
   // filtros rapidos client-side sobre a lista carregada
@@ -1196,7 +1368,12 @@ export default function InboxClient() {
                     ) : null}
                   </p>
                   <p className="truncate text-xs text-slate-500">
-                    {c?.contactIsGroup ? "grupo" : formatPhone(c?.contactPhone ?? "")} · {c?.numberLabel}
+                    {c?.contactIsGroup
+                      ? groupInfo
+                        ? `${groupInfo.size} ${groupInfo.size === 1 ? "membro" : "membros"}`
+                        : "grupo"
+                      : formatPhone(c?.contactPhone ?? "")}{" "}
+                    · {c?.numberLabel}
                     {c?.sectorName ? ` · ${c.sectorName}` : ""}
                   </p>
                 </div>
@@ -1238,6 +1415,22 @@ export default function InboxClient() {
                     className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
                   >
                     Reabrir conversa
+                  </button>
+                )}
+                {c?.contactIsGroup && (
+                  <button
+                    type="button"
+                    onClick={() => setMembersOpen(true)}
+                    title="Ver membros do grupo"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    <IconUsers className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden sm:inline">Membros</span>
+                    {groupInfo ? (
+                      <span className="rounded-full bg-slate-200 px-1.5 text-[10px] text-slate-700">
+                        {groupInfo.size}
+                      </span>
+                    ) : null}
                   </button>
                 )}
                 <button
@@ -1282,6 +1475,7 @@ export default function InboxClient() {
                 >
                   <MessageList
                     messages={selected.messages}
+                    mentionNames={mentionNames}
                     onReact={reactToMessage}
                     onOpenImage={setViewerSrc}
                     onDelete={deleteForAll}
@@ -1361,6 +1555,53 @@ export default function InboxClient() {
                     </p>
                     <p className="mt-0.5 text-xs text-slate-500">Canal: {c?.numberLabel}</p>
                   </div>
+
+                  {c?.contactIsGroup && (
+                    <div className="border-t border-slate-200 pt-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          Membros do grupo
+                        </p>
+                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                          {groupInfo?.size ?? 0}
+                        </span>
+                      </div>
+                      {groupInfo?.description ? (
+                        <p className="mt-1.5 line-clamp-2 text-xs text-slate-600">
+                          {groupInfo.description}
+                        </p>
+                      ) : null}
+                      {membersLoading && !groupInfo ? (
+                        <p className="mt-2 text-xs text-slate-500">Carregando membros...</p>
+                      ) : (groupInfo?.members?.length ?? 0) === 0 ? (
+                        <p className="mt-2 text-xs text-slate-500">Nenhum membro carregado.</p>
+                      ) : (
+                        <ul className="mt-2 space-y-1.5">
+                          {groupInfo!.members.slice(0, 5).map((m) => (
+                            <li key={m.jid} className="flex items-center justify-between gap-2 text-xs">
+                              <span className="truncate text-slate-700">{m.name}</span>
+                              {m.isSelf ? (
+                                <span className="shrink-0 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                  Você
+                                </span>
+                              ) : m.role !== "member" ? (
+                                <span className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+                                  {m.role === "superadmin" ? "Criador" : "Admin"}
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setMembersOpen(true)}
+                        className="mt-2.5 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50"
+                      >
+                        Ver todos os membros
+                      </button>
+                    </div>
+                  )}
 
                   <div className="border-t border-slate-200 pt-3">
                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -1561,6 +1802,16 @@ export default function InboxClient() {
                 </div>
               ) : null}
 
+              {/* popover de mencoes (@) em grupos */}
+              {showMentions ? (
+                <MentionPopover
+                  members={filteredMentionMembers}
+                  activeIndex={mentionIndex}
+                  onSelect={(m) => insertMention(m, "composer")}
+                  onHover={setMentionIndex}
+                />
+              ) : null}
+
               {/* popover de respostas rapidas (via "/" ou botao de raio) */}
               {showReplies ? (
                 <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-h-[40vh] max-w-md overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
@@ -1637,10 +1888,47 @@ export default function InboxClient() {
                   value={draft}
                   onChange={(e) => {
                     setDraft(e.target.value);
+                    setCursorPos(e.target.selectionStart ?? e.target.value.length);
+                    setMentionIndex(0);
+                    setMentionDismissedKey(null);
                     setReplyIndex(0);
+                  }}
+                  onClick={(e) => {
+                    setCursorPos(e.currentTarget.selectionStart ?? draft.length);
+                  }}
+                  onSelect={(e) => {
+                    setCursorPos(e.currentTarget.selectionStart ?? draft.length);
                   }}
                   onPaste={handlePaste}
                   onKeyDown={(e) => {
+                    if (showMentions && filteredMentionMembers.length > 0) {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setMentionIndex((i) => (i + 1) % filteredMentionMembers.length);
+                        return;
+                      }
+                      if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setMentionIndex(
+                          (i) => (i - 1 + filteredMentionMembers.length) % filteredMentionMembers.length
+                        );
+                        return;
+                      }
+                      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                        e.preventDefault();
+                        const chosen =
+                          filteredMentionMembers[
+                            Math.min(mentionIndex, filteredMentionMembers.length - 1)
+                          ];
+                        if (chosen) insertMention(chosen, "composer");
+                        return;
+                      }
+                    }
+                    if (showMentions && e.key === "Escape") {
+                      e.preventDefault();
+                      if (mentionTrigger) setMentionDismissedKey(mentionTrigger.key);
+                      return;
+                    }
                     if (showReplies && filteredQuickReplies.length > 0) {
                       if (e.key === "ArrowDown") {
                         e.preventDefault();
@@ -1686,7 +1974,9 @@ export default function InboxClient() {
                       ? "Conversa encerrada"
                       : pendingFiles.length > 0
                         ? "Adicione uma legenda (opcional) e pressione Enter..."
-                        : "Escreva a mensagem (Shift+Enter quebra linha, / para rápidas)..."
+                        : c?.contactIsGroup
+                          ? "Escreva a mensagem (@ para mencionar, / para rápidas)..."
+                          : "Escreva a mensagem (Shift+Enter quebra linha, / para rápidas)..."
                   }
                   disabled={!canSend || uploading}
                   className="max-h-[140px] min-h-[36px] flex-1 resize-none overflow-y-auto rounded-md border border-slate-300 px-3 py-2 text-sm leading-snug focus:border-sky-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
@@ -1742,6 +2032,17 @@ export default function InboxClient() {
           </button>
         </div>
       </Modal>
+      {/* modal de membros do grupo */}
+      <GroupMembersModal
+        open={membersOpen}
+        onClose={() => setMembersOpen(false)}
+        groupName={c?.contactName || c?.contactPhone || ""}
+        groupInfo={groupInfo}
+        loading={membersLoading}
+        canMention={Boolean(c?.contactIsGroup && canSend)}
+        onRefresh={() => void refreshMembers()}
+        onMention={(m) => insertMention(m, "append")}
+      />
       {/* visualizador de imagem: tela cheia com zoom + arraste */}
       {viewerSrc ? <ImageViewer src={viewerSrc} onClose={() => setViewerSrc(null)} /> : null}
     </div>

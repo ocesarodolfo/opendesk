@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import {
   IconBan,
   IconFile,
@@ -95,14 +95,65 @@ const MORE_EMOJIS = [
   "🤭","🫡","😱","😅","🤙","🤓","😇","🥹",
 ];
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderTextWithMentions(
+  text: string,
+  mentionNames?: string[]
+): React.ReactNode {
+  if (!text || !text.includes("@")) return text;
+
+  const knownSet = new Set<string>(["Você"]);
+  if (mentionNames) {
+    for (const raw of mentionNames) {
+      const trimmed = raw?.trim();
+      if (trimmed) knownSet.add(trimmed);
+    }
+  }
+
+  const knownSorted = [...knownSet].sort((a, b) => b.length - a.length);
+  const branches = [
+    `(?:${knownSorted.map(escapeRegex).join("|")})(?![\\wÀ-ÿ])`,
+    `\\+\\d{1,3}\\s?\\(\\d{2}\\)\\s?\\d{4,5}-\\d{4}`,
+    `\\d{10,20}(?!\\d)`,
+  ];
+  const re = new RegExp(`(?<![\\w.+-])(@(?:${branches.join("|")}))`, "gi");
+
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(re)) {
+    const idx = match.index ?? 0;
+    const token = match[1];
+    if (!token) continue;
+    if (idx > lastIndex) {
+      nodes.push(<Fragment key={`t-${lastIndex}`}>{text.slice(lastIndex, idx)}</Fragment>);
+    }
+    nodes.push(
+      <span key={`m-${idx}`} className="chat-mention rounded px-0.5 font-semibold">
+        {token}
+      </span>
+    );
+    lastIndex = idx + token.length;
+  }
+  if (nodes.length === 0) return text;
+  if (lastIndex < text.length) {
+    nodes.push(<Fragment key={`t-${lastIndex}`}>{text.slice(lastIndex)}</Fragment>);
+  }
+  return nodes;
+}
+
 export function MessageBubble({
   message,
+  mentionNames,
   onReact,
   onOpenImage,
   onDelete,
   onReply,
 }: {
   message: MessageItem;
+  mentionNames?: string[];
   onReact?: (message: MessageItem, emoji: string) => void;
   onOpenImage?: (src: string) => void;
   /** "apagar para todos" (so mensagens enviadas com id do WhatsApp) */
@@ -191,7 +242,9 @@ export function MessageBubble({
     body = (
       <>
         {body}
-        <p className="mt-1 whitespace-pre-wrap break-words">{message.content}</p>
+        <p className="mt-1 whitespace-pre-wrap break-words">
+          {renderTextWithMentions(message.content, mentionNames)}
+        </p>
       </>
     );
   }
@@ -259,7 +312,7 @@ export function MessageBubble({
                   "Mensagem citada"}
               </p>
               <p className="whitespace-pre-wrap break-words text-xs font-medium text-slate-700">
-                {message.quotedSnippet}
+                {renderTextWithMentions(message.quotedSnippet, mentionNames)}
               </p>
             </div>
           ) : null}
@@ -430,11 +483,13 @@ const RANK: Record<string, number> = { SENT: 0, DELIVERED: 1, READ: 2, FAILED: 0
 
 function AlbumBubble({
   items,
+  mentionNames,
   onOpenImage,
   onDelete,
   onReply,
 }: {
   items: MessageItem[];
+  mentionNames?: string[];
   onOpenImage?: (src: string) => void;
   onDelete?: (message: MessageItem) => void;
   onReply?: (message: MessageItem) => void;
@@ -510,7 +565,9 @@ function AlbumBubble({
             </div>
           )}
           {caption && !allDeleted ? (
-            <p className="whitespace-pre-wrap break-words px-3 py-2">{caption}</p>
+            <p className="whitespace-pre-wrap break-words px-3 py-2">
+              {renderTextWithMentions(caption, mentionNames)}
+            </p>
           ) : null}
           <p className={`flex items-center justify-end gap-1 px-3 pb-2 text-right text-xs ${failed && !pending ? META_FAILED : isOut ? META_OUT : META_IN}`}>
             {failed && !pending ? "falhou" : ""}
@@ -600,12 +657,14 @@ function formatDayLabel(iso: string): string {
    ========================================================================= */
 export function MessageList({
   messages,
+  mentionNames,
   onReact,
   onOpenImage,
   onDelete,
   onReply,
 }: {
   messages: MessageItem[];
+  mentionNames?: string[];
   onReact?: (message: MessageItem, emoji: string) => void;
   onOpenImage?: (src: string) => void;
   onDelete?: (message: MessageItem) => void;
@@ -640,10 +699,17 @@ export function MessageList({
 
         const bubble =
           b.length > 1 ? (
-            <AlbumBubble items={b} onOpenImage={onOpenImage} onDelete={onDelete} onReply={onReply} />
+            <AlbumBubble
+              items={b}
+              mentionNames={mentionNames}
+              onOpenImage={onOpenImage}
+              onDelete={onDelete}
+              onReply={onReply}
+            />
           ) : (
             <MessageBubble
               message={b[0]}
+              mentionNames={mentionNames}
               onReact={onReact}
               onOpenImage={onOpenImage}
               onDelete={onDelete}

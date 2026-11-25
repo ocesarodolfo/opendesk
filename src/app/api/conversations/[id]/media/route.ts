@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
-import { waManager } from "@/lib/whatsapp/manager";
+import { waManager, buildWireMentionText, type OutgoingMentionInput } from "@/lib/whatsapp/manager";
 import { emitRealtime } from "@/lib/realtime";
 import { isUploadAllowed, MAX_UPLOAD_BYTES, saveMediaFile } from "@/lib/media";
 import { canViewConversation, getSectorScope } from "@/lib/scope";
@@ -53,10 +53,36 @@ export async function POST(
     return NextResponse.json({ error: "Sem permissao para esta conversa." }, { status: 403 });
   }
 
+  let validMentions: OutgoingMentionInput[] = [];
+  const rawMentions = form.get("mentions");
+  if (typeof rawMentions === "string" && rawMentions.trim()) {
+    try {
+      const parsed = JSON.parse(rawMentions) as unknown;
+      if (Array.isArray(parsed)) {
+        validMentions = parsed.filter(
+          (m): m is OutgoingMentionInput =>
+            Boolean(
+              m &&
+                typeof m === "object" &&
+                typeof (m as OutgoingMentionInput).jid === "string" &&
+                typeof (m as OutgoingMentionInput).displayName === "string"
+            )
+        );
+      }
+    } catch {
+      /* ignora mentions malformados */
+    }
+  }
+
   // prefixo do atendente em LINHA PROPRIA (legenda desce p/ 2a linha);
   // se a legenda ficar vazia, sai o prefixo sozinho assim mesmo
   const prefix = conversation.whatsappNumber.prefixAgent ? `[${session.name}]\n` : "";
   const fullCaption = caption ? `${prefix}${caption}` : conversation.whatsappNumber.prefixAgent ? prefix.trim() : "";
+  const { wireText, mentionedJids } =
+    conversation.contact.isGroup && caption && validMentions.length > 0
+      ? buildWireMentionText(caption, validMentions)
+      : { wireText: caption, mentionedJids: [] };
+  const wireCaption = wireText ? `${prefix}${wireText}` : fullCaption;
 
   // grava arquivo ANTES do envio (a bolha do inbox precisa dele)
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -90,9 +116,10 @@ export async function POST(
       conversation.contact.phone,
       buffer,
       mime,
-      fullCaption,
+      wireCaption,
       file.name,
-      conversation.contact.jid
+      conversation.contact.jid,
+      mentionedJids.length > 0 ? mentionedJids : undefined
     );
     await prisma.message.update({ where: { id: message.id }, data: { externalId } });
   } catch (error) {
