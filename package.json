@@ -22,14 +22,14 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/client-s3": "^3.1177.0",
     "@prisma/adapter-mariadb": "^6.19.3",
-    "@prisma/client": "^6.2.1",
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@prisma/client": "^6.19.3",
+    "@whiskeysockets/baileys": "^6.7.24",
     "@xenova/transformers": "^2.17.2",
     "bcryptjs": "^2.4.3",
     "jose": "^5.9.6",
-    "next": "^15.1.5",
+    "next": "^15.5.29",
     "pino": "^9.6.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
@@ -38,20 +38,23 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^22.10.5",
+    "@types/node": "^22.20.7",
     "@types/qrcode": "^1.5.5",
-    "@types/react": "^19.0.2",
+    "@types/react": "^19.3.2",
     "@types/react-dom": "^19.0.2",
     "@types/web-push": "^3.6.4",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
-    "prisma": "^6.2.1",
+    "autoprefixer": "^10.7.0",
+    "postcss": "^8.5.33",
+    "prisma": "^6.19.3",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "mariadb": "^3.5.5"
   },
   "allowScripts": {
     "@prisma/client@6.19.3": true,

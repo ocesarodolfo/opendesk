@@ -441,7 +441,10 @@ export default function InboxClient() {
   function scrollToBottom(smooth = true) {
     stickBottomRef.current = true;
     setShowScrollBottom(false);
-    bottomRef.current?.scrollIntoView({
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
       behavior: (smooth ? "smooth" : "instant") as ScrollBehavior,
     });
   }
@@ -505,18 +508,20 @@ export default function InboxClient() {
     }
   }
 
-  // troca de conversa: sempre vai ao fim, sem animacao
+  // troca de conversa: sempre vai ao fim, sem animacao (rola apenas o container do chat, nunca a pagina)
   useEffect(() => {
     stickBottomRef.current = true;
     setShowScrollBottom(false);
-    bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [selected?.conversation.id]);
 
   // mensagem nova: so rola se o usuario ja estava no rodape
   useEffect(() => {
     if (!selected) return;
     if (stickBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant" as ScrollBehavior });
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }
   }, [selected?.messages.length]);
 
@@ -1079,12 +1084,12 @@ export default function InboxClient() {
   });
 
   return (
-    <div className="grid h-[calc(100dvh-5.5rem)] min-w-0 grid-cols-1 gap-4 overflow-hidden sm:h-[calc(100dvh-6.5rem)] md:h-[calc(100dvh-4rem)] lg:grid-cols-[360px_minmax(0,1fr)]">
+    <div className="grid h-[calc(100dvh-5.5rem)] min-h-0 min-w-0 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 overflow-hidden sm:h-[calc(100dvh-6.5rem)] md:h-[calc(100dvh-4rem)] lg:grid-cols-[360px_minmax(0,1fr)]">
       {/* ---- lista de conversas ---- */}
       <div
         className={`${
           selected || openingId ? "hidden lg:flex" : "flex"
-        } flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
+        } min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
       >
         <div className="border-b border-slate-100 p-3">
           <div className="grid grid-cols-4 gap-1 rounded-md bg-slate-100 p-1 text-xs font-medium">
@@ -1310,7 +1315,7 @@ export default function InboxClient() {
         }}
         className={`${
           !selected && !openingId ? "hidden lg:flex" : "flex"
-        } relative min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
+        } relative min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white`}
       >
         {dragActive && canSend ? (
           <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center border-2 border-dashed border-sky-500 bg-sky-50/90 backdrop-blur-[1px]">
@@ -1344,8 +1349,8 @@ export default function InboxClient() {
         ) : (
           <>
             {/* cabecalho: limpo e focado na acao imediata */}
-            <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
+            <div className="flex shrink-0 min-w-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3 py-2.5 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-3">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1353,7 +1358,7 @@ export default function InboxClient() {
                     setDetailsOpen(false);
                   }}
                   title="Voltar para a lista"
-                  className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 lg:hidden"
+                  className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 lg:hidden"
                 >
                   ←
                 </button>
@@ -1362,7 +1367,7 @@ export default function InboxClient() {
                     {c?.contactIsGroup ? <IconUsers className="h-4 w-4 shrink-0" /> : null}
                     <span className="truncate">{c?.contactName || c?.contactPhone}</span>
                     {c?.contactIsGroup ? (
-                      <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                      <span className="shrink-0 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
                         Grupo
                       </span>
                     ) : null}
@@ -1378,7 +1383,7 @@ export default function InboxClient() {
                   </p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                 <select
                   value={c?.assignedUserId ?? ""}
                   onChange={(e) => void assignTo(e.target.value || null)}
@@ -1396,25 +1401,28 @@ export default function InboxClient() {
                 {c?.status === "PENDING" && (
                   <button
                     onClick={() => void act("take")}
-                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                    className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 sm:px-3"
                   >
-                    Iniciar atendimento
+                    <span className="sm:hidden">Iniciar</span>
+                    <span className="hidden sm:inline">Iniciar atendimento</span>
                   </button>
                 )}
                 {c?.status === "OPEN" && (
                   <button
                     onClick={() => void act("close")}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 sm:px-3"
                   >
-                    Encerrar conversa
+                    <span className="sm:hidden">Encerrar</span>
+                    <span className="hidden sm:inline">Encerrar conversa</span>
                   </button>
                 )}
                 {c?.status === "CLOSED" && (
                   <button
                     onClick={() => void act("reopen")}
-                    className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+                    className="rounded-md bg-sky-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-sky-700 sm:px-3"
                   >
-                    Reabrir conversa
+                    <span className="sm:hidden">Reabrir</span>
+                    <span className="hidden sm:inline">Reabrir conversa</span>
                   </button>
                 )}
                 {c?.contactIsGroup && (
@@ -1422,7 +1430,7 @@ export default function InboxClient() {
                     type="button"
                     onClick={() => setMembersOpen(true)}
                     title="Ver membros do grupo"
-                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 sm:px-2.5"
                   >
                     <IconUsers className="h-3.5 w-3.5 shrink-0" />
                     <span className="hidden sm:inline">Membros</span>
@@ -1437,7 +1445,7 @@ export default function InboxClient() {
                   type="button"
                   onClick={() => setDetailsOpen((o) => !o)}
                   title="Detalhes, setor e etiquetas"
-                  className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold ${
+                  className={`rounded-md border px-2 py-1.5 text-xs font-semibold sm:px-2.5 ${
                     detailsOpen
                       ? "border-sky-400 bg-sky-50 text-sky-700"
                       : "border-slate-200 text-slate-600 hover:bg-slate-50"
